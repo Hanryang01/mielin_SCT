@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>로그인 - Monitor Console</title>
+  <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />
+  <link rel="stylesheet" crossorigin href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Pacifico&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/css/login.css?v=1" />
+</head>
+<body>
+  <div class="login-card">
+    <div class="login-banner">
+      <div class="login-eyebrow">MONITOR CONSOLE</div>
+      <div class="login-logo">Mielin</div>
+      <div class="login-subtitle">모니터링 포털에 로그인하세요</div>
+    </div>
+    <form class="login-form" id="loginForm" autocomplete="off">
+      <label class="login-field" for="username">
+        <span>사용자 ID</span>
+        <input id="username" name="username" type="text" autocomplete="username" autofocus />
+      </label>
+      <label class="login-field" for="password">
+        <span>비밀번호</span>
+        <input id="password" name="password" type="password" autocomplete="current-password" />
+      </label>
+      <div id="loginError" class="login-error" hidden></div>
+      <button class="login-submit" type="submit">로그인</button>
+    </form>
+  </div>
+
+  <script type="module" src="/static/js/login.js"></script>
+</body>
+</html>

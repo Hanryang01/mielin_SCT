@@ -1,0 +1,908 @@
+:root {
+  color-scheme: light;
+  --bg: #f5f6fa;
+  --panel: #ffffff;
+  --line: #d9dee8;
+  --text: #111827;
+  --muted: #6b7280;
+  --blue: #3468db;
+  --red: #dc2626;
+  --green: #15803d;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: var(--bg);
+  color: var(--text);
+  font-family: "Pretendard Variable", Pretendard, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+button, input, select, textarea { font-family: inherit; }
+
+header.app-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 24px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+header.app-header h1 {
+  margin: 0;
+  font-size: 20px;
+}
+
+/* 목록을 스크롤해도 헤더(+admin의 진행률 카드)는 화면 위에 그대로 고정된다
+   (2026-08-31, 요청). admin.html은 header와 #progressBar를 한 덩어리로
+   묶어서 이 클래스를 붙인다 — 각자 따로 sticky를 걸면 둘 다 top:0을 다투다
+   겹쳐버리므로, 감싸는 요소 하나만 sticky로 두고 내부 순서는 평범한 문서
+   흐름에 맡긴다. review.html은 header 하나뿐이라 바로 붙인다.
+   팝오버(z-index 60 이상, range-popover/level-popover)보다는 낮게 둬서
+   그 위에 눌려 보이지 않게 한다. */
+.sticky-top {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  background: var(--bg);
+}
+
+.app-nav {
+  display: flex;
+  gap: 4px;
+  margin-left: auto;
+}
+.app-nav a {
+  padding: 8px 14px;
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 600;
+  text-decoration: none;
+}
+.app-nav a:hover { background: var(--bg); }
+.app-nav a.active { background: var(--blue); color: #fff; }
+
+/* 버튼/링크가 아니라 정보 표시용 span이다 — 클릭해도 아무 동작이 없어야 하므로
+   hover 효과 등을 넣지 않는다. 원래는 진한 파란 배경이었으나, 실제로 클릭
+   가능한 새로고침 버튼(.nav-refresh)에 그 강조색을 넘기고 테두리만 남겼다
+   (2026-08-31 — "누를 수 있는 것이 눈에 띄어야 한다"). */
+.nav-user {
+  margin-left: 8px;
+  padding: 7px 13px;
+  border: 1px solid var(--blue);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--blue);
+  font-size: 15px;
+  font-weight: 700;
+}
+/* 목록 화면(admin.js/review.js)의 옛 "조회" 버튼 자리를 대신한다 — 필터 영역까지
+   내려가지 않고 상단에서 바로 새로고침하도록 자리를 옮겼다(2026-08-31).
+   .nav-user가 쓰던 진한 파란 배경 스타일을 그대로 물려받았다. */
+.nav-refresh {
+  margin-left: 8px;
+  padding: 8px 14px;
+  border: none;
+  border-radius: 6px;
+  background: var(--blue);
+  color: #fff;
+  font-size: 15px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.nav-refresh:hover { filter: brightness(1.08); }
+.nav-logout {
+  height: auto;
+  padding: 8px 14px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.nav-logout:hover { background: var(--bg); color: var(--text); }
+
+main {
+  padding: 20px 24px;
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.list-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px;
+  border-bottom: 1px solid #edf0f5;
+  background: #fbfcfe;
+}
+.list-title { font-weight: 700; }
+
+.data-view-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.data-view-controls input[type="search"] { min-width: 220px; }
+
+button, select, input {
+  height: 36px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--text);
+  padding: 0 12px;
+  font-size: 14px;
+}
+button.primary {
+  border-color: var(--blue);
+  background: var(--blue);
+  color: white;
+  font-weight: 700;
+  cursor: pointer;
+}
+button:disabled { opacity: 0.55; cursor: not-allowed; }
+
+/* 기간 프리셋 pill 버튼 그룹 */
+/* 버튼(.range-action)들이 실제 상태를 기록하는 곳은 이 select다
+   (date-range.js가 값을 읽고 쓴다). aria-hidden만으로는 화면에서 안 사라져서
+   pill 버튼 옆에 진짜 드롭다운이 하나 더 보이는 문제가 있었다 — 시각적으로만
+   숨긴다 (DOM에서 없애면 date-range.js가 select를 못 찾아 버튼이 멈춘다). */
+.range-native-select { display: none; }
+.range-picker { position: relative; flex: 0 0 auto; }
+.range-actions {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+}
+.range-action {
+  position: relative;
+  min-width: 72px;
+  height: 36px;
+  margin-left: -1px;
+  border-radius: 0;
+  background: #fff;
+  color: #344054;
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.range-action:first-child { margin-left: 0; border-radius: 8px 0 0 8px; }
+.range-action:last-child { border-radius: 0 8px 8px 0; }
+.range-action.active {
+  z-index: 1;
+  border-color: var(--blue);
+  background: var(--blue);
+  color: #fff;
+  font-weight: 700;
+}
+.range-action-custom { min-width: 88px; }
+
+.range-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 60;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px 10px;
+  width: min(360px, calc(100vw - 32px));
+  padding: 16px;
+  border: 1px solid #dfe3ea;
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 12px 28px rgba(17, 24, 39, 0.16);
+}
+.range-date-field {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  color: #667085;
+  font-size: 12px;
+  font-weight: 500;
+}
+.range-date-field input { width: 100%; min-width: 0; height: 38px; color: #111827; font-size: 14px; }
+.range-apply-button { grid-column: 1 / -1; width: 100%; height: 38px; }
+
+/* 난이도 다중 선택 (difficulty-filter.js) — 필터바가 이미 붐비므로 알약
+   버튼 5개를 펼쳐두지 않고 버튼 하나로 접어둔다. 열리는 방식은 기간 필터의
+   range-popover와 같다. */
+.level-picker { position: relative; flex: 0 0 auto; }
+.level-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 36px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--text);
+  font-size: 14px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.level-toggle:hover { background: var(--bg); }
+/* 무엇이 걸려 있는지 접힌 상태에서도 눈에 띄게 한다 */
+.level-picker.has-selection .level-toggle {
+  border-color: var(--blue);
+  background: #eff6ff;
+  color: #1d4ed8;
+  font-weight: 700;
+}
+.level-popover {
+  min-width: 260px;
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  z-index: 60;
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid #dfe3ea;
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 12px 28px rgba(17, 24, 39, 0.16);
+}
+/* 팝오버 안의 두 구획(난이도 / 판독 불가) — 구분선과 소제목으로 나눠서
+   "판독 불가가 난이도 5"라는 오해가 생기지 않게 한다. */
+.level-section + .level-section {
+  padding-top: 10px;
+  border-top: 1px solid #edf0f5;
+}
+.level-section-title {
+  margin-bottom: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+/* "판독 불가만" 보는 동안 난이도 구획은 의미가 없어 흐리게 둔다 */
+.level-section.dimmed { opacity: 0.45; }
+
+.level-buttons { display: flex; gap: 6px; }
+.level-modes { display: flex; gap: 6px; }
+.level-mode {
+  flex: 1 1 0;
+  height: 32px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.level-mode:hover { background: var(--bg); }
+.level-mode[aria-pressed="true"] {
+  border-color: var(--blue);
+  background: var(--blue);
+  color: #fff;
+}
+.level-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  width: 64px;
+  height: auto;
+  padding: 8px 4px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--muted);
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1.2;
+  cursor: pointer;
+}
+.level-btn .level-btn-short { font-size: 11px; font-weight: 500; white-space: nowrap; }
+.level-btn:hover { background: var(--bg); }
+.level-btn[aria-pressed="true"] {
+  border-color: var(--blue);
+  background: var(--blue);
+  color: #fff;
+}
+.level-reset {
+  height: 32px;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.level-reset:hover { color: var(--text); text-decoration: underline; }
+
+/* 결과 0건일 때 어떤 필터 때문인지 보여준다 — 정상적인 필터 조합 결과를
+   고장으로 오해하지 않도록(2026-08-24). */
+.empty-filters {
+  margin: 12px auto 10px;
+  max-width: 420px;
+  text-align: left;
+  color: var(--muted);
+  font-size: 13px;
+}
+.empty-filters ul { margin: 6px 0 0; padding-left: 18px; }
+.empty-filters li { margin: 2px 0; color: var(--text); }
+
+/* 상태 뱃지 pill */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  min-width: 54px;
+  justify-content: center;
+  border-radius: 999px;
+  padding: 4px 8px;
+  font-size: 12px;
+  font-weight: 700;
+  background: #eef2f7;
+  color: #374151;
+}
+/* 실제로 쓰는 색만 남긴다 — 완료(green)/진행중(yellow) 두 가지뿐이다.
+   blue/cyan/red/gray는 코드가 만들지 않아 2026-08-24에 제거했다. */
+.badge.green { background: #dcfce7; color: #15803d; }
+.badge.yellow { background: #fef3c7; color: #a16207; }
+
+/* 데이터 테이블 */
+/* overflow-x는 표를 담는 이 카드에만 건다 — .panel 전체에 걸려 있으면
+   (2026-08-27 이전) CSS 스펙상 overflow-x가 'visible'이 아닌 값이면
+   overflow-y도 강제로 'auto'가 되어(overflow-y: visible을 따로 지정해도
+   먹히지 않는다), .panel 안의 필터 팝오버(난이도·기간)가 .panel의 세로
+   높이에서 잘려버렸다. 조회 결과가 0건이면 .panel 높이가 짧아져 필터
+   드롭다운을 열 때마다 팝오버 아래쪽이 잘려 보였다. 표만 좁혀서 담으면
+   가로 스크롤은 그대로 되면서 팝오버는 더 이상 잘리지 않는다. */
+/* border-radius를 .panel과 같은 값으로 맞춘다 — overflow가 여기로 옮겨왔으니
+   표의 각진 아래쪽 모서리를 .panel의 둥근 모서리에 맞게 이 카드가 직접
+   잘라내야 한다(전에는 .panel의 overflow가 대신 해줬다). */
+.data-list-card { min-width: 0; overflow-x: auto; border-radius: 0 0 8px 8px; }
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+th, td {
+  padding: 12px 14px;
+  border-bottom: 1px solid #edf0f5;
+  text-align: left;
+  vertical-align: middle;
+}
+th { background: #f8fafc; color: #374151; font-weight: 700; white-space: nowrap; }
+tr:last-child td { border-bottom: 0; }
+tbody tr:hover td { background: #f7faff; }
+
+.cell-answer { max-width: 320px; white-space: normal; font-size: 16px; line-height: 1.5; }
+
+.thumb {
+  display: block;
+  /* 목록에서는 원본의 50%로 축소 표시 (레이아웃 크기도 함께 줄어듦).
+     클릭 시 열리는 확대 모달(.image-modal img)은 이 규칙의 영향을 받지 않아 원본 크기 유지 */
+  zoom: 0.5;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: #f1f3f7;
+  cursor: zoom-in;
+}
+.thumb-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 160px;
+  height: 120px;
+  border-radius: 6px;
+  border: 1px dashed var(--line);
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
+  line-height: 1.3;
+}
+.cell-image { max-width: none; }
+
+/* OCR 검수 화면: 목록에서도 축소하지 않고 원본 크기로 표시 (§4.1) */
+.review-image {
+  display: block;
+  max-width: 384px;
+  max-height: 384px;
+  width: auto;
+  height: auto;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: #f1f3f7;
+  cursor: zoom-in;
+}
+
+.typing-input {
+  width: 100%;
+  height: auto;
+  padding: 8px 10px;
+  resize: vertical;
+  font-size: 16px;
+  line-height: 1.45;
+}
+/* 판독 불가 선택 시 잠긴 입력창 — 값이 남아 있어도 저장되지 않는다는 것이
+   보이도록 회색 처리하고, 바로 아래 안내 문구를 함께 띄운다(§4.3). */
+.typing-input.locked-unreadable {
+  background: #f3f4f6;
+  color: #9ca3af;
+  cursor: not-allowed;
+}
+.unreadable-hint {
+  padding: 4px 2px;
+  color: #b45309;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.typing-submit { align-self: start; }
+.typing-classify { display: grid; gap: 6px; }
+
+/* OCR 난이도(1~4) 버튼 + 판독 불가 버튼 — 9종 분류 드롭다운을 대체한 단일
+   클릭 입력(§5.1). 둘은 하나의 선택 그룹으로 상호 배타적이다. */
+.difficulty-picker {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.difficulty-picker-label { font-size: 14px; color: var(--muted); font-weight: 600; }
+.difficulty-btn {
+  width: 38px;
+  height: 38px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--muted);
+  cursor: pointer;
+}
+.difficulty-btn:hover { background: var(--bg); }
+.difficulty-btn[aria-pressed="true"] {
+  border-color: var(--blue);
+  background: var(--blue);
+  color: #fff;
+}
+.unreadable-btn {
+  height: 38px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--muted);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.unreadable-btn:hover { background: var(--bg); }
+.unreadable-btn[aria-pressed="true"] {
+  border-color: #b91c1c;
+  background: #fee2e2;
+  color: #b91c1c;
+}
+
+/* 입력 속도용 툴바 — [OCR 복사] (§5.3) */
+.typing-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.copy-ocr-btn {
+  height: 32px;
+  padding: 0 12px;
+  border: 1px solid #bfdbfe;
+  border-radius: 6px;
+  background: #eff6ff;
+  color: #1d4ed8;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.copy-ocr-btn:hover { background: #dbeafe; }
+.typing-hint { font-size: 13px; color: var(--muted); }
+
+/* OCR과 다른 부분 표시 (§5.3). 입력창 아래 실시간 미리보기 + 저장된 결과 표시 */
+.diff-preview {
+  padding: 6px 8px;
+  border: 1px dashed var(--line);
+  border-radius: 6px;
+  background: #fcfcfd;
+  font-size: 15px;
+  line-height: 1.5;
+  word-break: break-word;
+}
+.diff-same { color: var(--muted); font-size: 13px; }
+.my-diff-line { font-size: 13px; color: #1e3a8a; word-break: break-word; }
+.my-diff-line.muted { color: #3b6fd4; }
+
+/* 오인식(replace) / OCR에만 있음(delete) / OCR이 누락(insert)을 색으로 구분 */
+mark.diff-replace,
+mark.diff-delete,
+mark.diff-insert {
+  padding: 0 2px;
+  border-radius: 3px;
+  font-weight: 700;
+}
+mark.diff-replace { background: #fef08a; color: #854d0e; }
+mark.diff-delete { background: #fecaca; color: #991b1b; text-decoration: line-through; }
+mark.diff-insert { background: #bbf7d0; color: #166534; }
+
+/* 부정 표현(죽음/자살/우울 등) 체크박스 — 자동 감지값을 기본으로 미리 켜둔다(§5) */
+.negative-flag-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 14px;
+  color: #b91c1c;
+  cursor: pointer;
+  width: fit-content;
+}
+.negative-flag-inline input[type="checkbox"] { width: 18px; height: 18px; margin: 0; cursor: pointer; }
+.negative-tag { color: #b91c1c; font-weight: 600; }
+
+.reviewer-select-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--muted);
+  font-weight: 600;
+}
+.reviewer-select-label select { height: 36px; }
+
+.reviews-summary { display: grid; gap: 8px; margin-top: 6px; font-size: 13px; }
+
+/* "OCR / 검수자 입력" 칸의 구획(질문/OCR/검수자별 줄) 라벨과 구분선
+   (2026-08-27) — 라벨 없이 텍스트만 이어지면 지금 보는 줄이 무엇인지 눈으로
+   훑어야만 알 수 있었다. 간격·구분선은 여기서 한 번만 정하고 ocrCell(admin.js)의
+   모든 구획(질문 포함)이 같은 규칙을 쓴다 — `+ .cell-section`은 인접 형제에만
+   붙는 선택자라 첫 구획 위에는 선이 안 붙고, 그 뒤로는 질문↔OCR 사이든
+   검수자 줄 사이든 구분 없이 똑같이 붙는다. */
+.cell-label { font-size: 11px; font-weight: 700; color: var(--muted); }
+.cell-section + .cell-section {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--line);
+}
+
+/* OCR/검수자 줄은 "라벨   내용"을 한 줄에 놓는다(2026-08-27) — 질문은 위
+   .cell-section 규칙만 쓰고 이 레이아웃과는 무관하다(questionBlock, 라벨이
+   없어 한 줄로 놓을 대상 자체가 없다). 라벨 칸 너비를 고정해 OCR·검수자 A·
+   검수자 B의 내용이 서로 같은 x 위치에서 시작하게 한다 — "검수자 A"가
+   "OCR"보다 길어서 고정 폭 없이는 내용 시작점이 줄마다 어긋난다. */
+.cell-row { display: flex; align-items: flex-start; gap: 10px; }
+.cell-row .cell-label {
+  flex: 0 0 68px;
+  padding-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cell-row .ocr-original,
+.cell-row .reviewer-typed { flex: 1; min-width: 0; }
+
+/* 표 안의 SCT 질문 — 글자 스타일은 아래 .card-question 규칙에 묶어 검수자
+   화면과 똑같이 보이게 했다 (2026-08-27). 전체 문장은 title 속성으로 뜬다. */
+.ocr-original { font-size: 16px; line-height: 1.5; }
+.reviewer-typed { font-size: 15px; color: var(--muted); }
+
+/* 검수자 줄의 상태 칩 (2026-08-27) — 옮겨 적은 내용이 아니라 "검수자가 무엇을
+   했는가"(미처리/패스/판독 불가)를 나타낸다. 바로 위 OCR 원문과 글자를 맞대어
+   보는 자리라 상태를 맨 글씨로 적으면 필기 내용으로 오인되므로, 배경을 줘서
+   본문과 분리한다. 크기는 상단 상태 뱃지(.badge)보다 한 단계 작게 둔다 —
+   레코드 전체의 상태가 아니라 한 검수자의 상태이기 때문이다.
+
+   패스 색은 .badge.green과 같은 값을 쓴다(완료와 같은 계열의 "정상 종료").
+   판독 불가는 주황 계열로, 같은 표에 있는 노랑(진행중) 뱃지와 겹치지 않게 한다. */
+.state-chip {
+  display: inline-block;
+  border-radius: 999px;
+  padding: 2px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.5;
+}
+.state-chip.pass { background: #dcfce7; color: #15803d; }
+.state-chip.unreadable { background: #ffedd5; color: #c2410c; }
+.state-chip.pending { background: #e5e7eb; color: #4b5563; }
+
+/* 관리자 판정 입력 모달 (2026-08-24) — 예전에는 표 아래 행에 폼을 펼쳤는데,
+   난이도 버튼이 들어가면서 행 높이가 들쭉날쭉해지고 어느 레코드의 폼인지
+   헷갈렸다. 이미지 확대 모달(.image-modal)과 같은 조작(바깥 클릭/ESC)이다. */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(17, 24, 39, 0.55);
+}
+.modal-card {
+  width: min(520px, 100%);
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
+  display: grid;
+  gap: 12px;
+  padding: 20px;
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 20px 48px rgba(17, 24, 39, 0.3);
+}
+.modal-title { font-size: 17px; font-weight: 700; }
+.modal-meta { color: var(--muted); font-size: 13px; font-weight: 600; }
+.modal-ocr {
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: var(--bg);
+  font-size: 15px;
+  word-break: break-word;
+}
+.modal-reviews {
+  display: grid;
+  gap: 3px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: #eff6ff;
+  color: #1e40af;
+  font-size: 13px;
+}
+.modal-field { display: grid; gap: 6px; }
+.modal-label { font-size: 13px; font-weight: 700; }
+.modal-hint { color: var(--muted); font-weight: 500; }
+.modal-levels { flex-wrap: wrap; align-items: stretch; }
+.modal-comment {
+  width: 100%;
+  height: auto;
+  padding: 8px 10px;
+  font-size: 15px;
+  resize: vertical;
+}
+/* justify-content: flex-end — "선택 해제" 버튼이 있을 때는 margin-right: auto로
+   그 버튼만 왼쪽에 붙이고 취소/저장은 자연히 오른쪽에 남았다. 버튼 자체를
+   없앤 뒤(2026-08-27, "삭제 대신 고쳐 쓴다" 원칙과 맞지 않아 제거) 그 트릭이
+   없어졌으니 오른쪽 정렬을 직접 지정한다. */
+.modal-actions { display: flex; gap: 8px; align-items: center; justify-content: flex-end; }
+.modal-cancel { cursor: pointer; }
+.modal-save { cursor: pointer; }
+.modal-error { color: var(--red); font-size: 13px; font-weight: 600; }
+.admin-comment-toggle {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+  padding: 4px 10px;
+  font-size: 13px;
+  cursor: pointer;
+  width: fit-content;
+}
+.admin-comment-toggle:hover { background: var(--bg); }
+.empty { padding: 60px; text-align: center; color: var(--muted); }
+.message { color: var(--red); font-size: 13px; margin: 12px 14px 0; }
+
+.pager {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  padding: 12px 14px;
+  border-top: 1px solid #edf0f5;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+/* 이미지 확대 모달 — 원본 크기 그대로, 화면보다 크면 스크롤 */
+.image-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  overflow: auto;
+  padding: 24px;
+  background: rgba(17, 24, 39, 0.6);
+}
+.image-modal img {
+  border-radius: 8px;
+  background: #fff;
+}
+
+@media (max-width: 900px) {
+  main { padding: 16px; }
+  .data-view-controls { justify-content: flex-start; }
+}
+
+/* Admin 진행 현황 요약 (§4.5) */
+.progress-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  /* sticky-top 래퍼로 옮기면서 <main>의 padding을 더 이상 못 받는다
+     (2026-08-31) — 헤더와 같은 좌우 여백(24px)을 직접 갖는다. */
+  padding: 16px 24px 0;
+  margin-bottom: 16px;
+}
+/* 진행 현황 조회 실패 문구 — 공용 메시지 박스(#message)는 목록 조회가 비우므로
+   실패한 자리에 직접 적는다(2026-08-27). */
+.progress-error { padding: 12px 14px; color: var(--red); font-size: 13px; }
+.progress-stat {
+  flex: 1 1 160px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+}
+.progress-stat .stat-label { color: var(--muted); font-size: 12px; font-weight: 600; }
+.progress-stat .stat-value { margin-top: 4px; font-size: 20px; font-weight: 700; }
+.progress-stat.done .stat-value { color: var(--green); }
+.progress-stat.wip .stat-value { color: #a16207; }
+
+/* 그리드 모드 (§4.2 — 2026-08-21부터 유일한 보기 방식)
+   1920px 화면에서 5열로 나오면 카드가 너무 작아 가독성이 떨어진다는 피드백에 따라
+   최소 폭을 넓혀 4열로 줄이고, 내부 이미지/글씨/버튼도 함께 키웠다. */
+.review-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(420px, 1fr));
+  gap: 16px;
+  padding: 14px;
+}
+.review-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+.review-card.selected { border-color: var(--blue); box-shadow: 0 0 0 2px rgba(52, 104, 219, 0.15); }
+.review-card.done { background: #f8fafc; }
+
+.card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--muted);
+  font-weight: 600;
+}
+.card-head input[type="checkbox"] { width: 20px; height: 20px; flex: 0 0 auto; margin: 0; padding: 0; cursor: pointer; }
+.card-head .card-meta { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 부정 표현 체크박스는 항상 눈에 띄어야 하므로 카드 우측 상단에 고정한다 */
+.card-head .negative-flag-inline { flex: 0 0 auto; margin-left: auto; }
+
+/* min-height를 두지 않는다(2026-08-27) — SCT 답변 이미지는 가로로 긴 필기
+   한 줄(예: 910×227, 가로세로비 4:1)이라 카드 폭에 맞춰 축소하면 실제 높이가
+   130px보다 훨씬 작다. min-height로 박스를 억지로 키우면 그 차이만큼 이미지
+   위아래에 배경색 여백이 생긴다 — 세로로 긴 이미지가 섞여 있어도 justify-content
+   가 가로 중앙 정렬을 계속 맡으므로 없애도 문제없다. */
+.card-image-wrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  background: #f1f3f7;
+  overflow: hidden;
+}
+/* 그리드에서는 카드 폭에 맞춰 축소한다 (§4.1의 "크게 보기"는 리스트 모드가 담당) */
+.card-image-wrap img {
+  max-width: 100%;
+  max-height: 220px;
+  width: auto;
+  height: auto;
+  cursor: zoom-in;
+}
+.card-ocr {
+  font-size: 18px;
+  font-weight: 500;
+  line-height: 1.5;
+  word-break: break-word;
+  min-height: 24px;
+}
+.card-ocr .ocr-empty { color: var(--muted); }
+.card-typing { display: grid; gap: 8px; }
+.card-typing textarea { width: 100%; height: auto; padding: 8px 10px; font-size: 16px; resize: vertical; }
+.card-typing select, .card-typing input[type="text"] { width: 100%; height: 36px; font-size: 15px; }
+.card-typing .diff-preview { font-size: 15px; }
+
+/* 하단 고정 일괄 처리 바 */
+.bulk-bar {
+  position: sticky;
+  bottom: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-top: 16px;
+  padding: 12px 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: 0 -4px 16px rgba(17, 24, 39, 0.08);
+}
+.bulk-count { margin-right: auto; font-size: 14px; font-weight: 700; }
+.bulk-clear {
+  height: 36px;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.bulk-clear:hover { color: var(--text); text-decoration: underline; }
+
+/* 내가 남긴 처리 내용 (완료 전에도 본인 것은 확인/수정 가능)
+   admin.js의 검수 요약 셀도 같은 클래스(.my-review)를 재사용하므로, 기본값은
+   admin 쪽 크기(.reviews-summary와 맞춘 13px)로 유지하고 그리드 카드에서만
+   .review-card .my-review로 더 키운다 — 안 그러면 카드용 확대가 admin
+   테이블에도 그대로 번진다. */
+.my-review {
+  display: grid;
+  gap: 6px;
+  margin-top: 6px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: #eff6ff;
+  color: #1e40af;
+  font-size: 14px;
+  word-break: break-word;
+}
+.review-card .my-review {
+  padding: 10px 12px;
+  font-size: 15px;
+}
+.my-typed-text {
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 1.5;
+  color: #1e3a8a;
+}
+.my-typed-meta { font-size: 14px; color: #3b6fd4; }
+.edit-btn {
+  justify-self: start;
+  height: 30px;
+  padding: 0 12px;
+  border: 1px solid #bfdbfe;
+  border-radius: 6px;
+  background: #fff;
+  color: #1d4ed8;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.review-card .edit-btn {
+  height: 34px;
+  padding: 0 14px;
+  font-size: 14px;
+}
+.edit-btn:hover { background: #dbeafe; }
+
+/* SCT 질문 — 판독의 맥락 단서라 읽히는 크기여야 한다 (3줄까지).
+   검수자 그리드 카드와 admin 표(.cell-question)가 같은 규칙을 쓴다 (2026-08-27). */
+.card-question,
+.cell-question {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  color: #1d4ed8;
+  font-size: 16px;
+  line-height: 1.5;
+}

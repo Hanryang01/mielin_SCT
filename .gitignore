@@ -1,0 +1,6 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+.mysql/credentials.txt
+.mysql/data/

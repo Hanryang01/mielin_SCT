@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>OCR 검수</title>
+  <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />
+  <link rel="stylesheet" crossorigin href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css" />
+  <link rel="stylesheet" href="/static/css/styles.css?v=26" />
+</head>
+<body>
+  <header class="app-header sticky-top">
+    <h1>OCR 검수</h1>
+    <nav class="app-nav"></nav>
+  </header>
+  <main>
+    <section class="panel">
+      <div class="list-head">
+        <div class="list-title">OCR 검수 목록</div>
+        <div class="data-view-controls">
+          <label class="reviewer-select-label">
+            <input type="checkbox" id="negativeOnly" />
+            부정 표현만
+          </label>
+          <select id="mineFilter" title="내 처리 상태">
+            <option value="unreviewed" selected>아직 처리하지 않은 것</option>
+            <option value="typing">타이핑한 것</option>
+            <option value="pass">패스한 것</option>
+            <option value="all">전체 (처리 여부 무관)</option>
+          </select>
+          <div id="difficultyFilter"></div>
+          <select id="dateRange" class="range-native-select" aria-hidden="true" tabindex="-1">
+            <option value="yesterday">전일</option>
+            <option value="month">최근 1개월</option>
+            <option value="all" selected>전체 기간</option>
+            <option value="custom">직접 입력</option>
+          </select>
+          <div class="range-picker">
+            <div class="range-actions" data-range-control="dateRange" aria-label="조회 기간">
+              <button type="button" class="range-action" data-range-value="yesterday" aria-pressed="false">전일</button>
+              <button type="button" class="range-action" data-range-value="month" aria-pressed="false">최근 1개월</button>
+              <button type="button" class="range-action active" data-range-value="all" aria-pressed="true">전체 기간</button>
+              <button type="button" class="range-action range-action-custom" data-range-value="custom" aria-pressed="false">📅 직접 입력 ▾</button>
+            </div>
+            <div class="range-popover" data-range-popover="dateRange" hidden>
+              <label class="range-date-field" for="dateStart"><span>시작일</span><input id="dateStart" type="date" /></label>
+              <label class="range-date-field" for="dateEnd"><span>종료일</span><input id="dateEnd" type="date" /></label>
+              <button class="primary range-apply-button" type="button" data-range-apply="dateRange">적용</button>
+            </div>
+          </div>
+          <input id="keyword" type="search" placeholder="assessment_id, 환자, 답변 내용" />
+        </div>
+      </div>
+      <div id="message" class="message" hidden></div>
+      <div class="data-list-card">
+        <div id="recordTableWrap"></div>
+        <div id="pager" class="pager" hidden></div>
+      </div>
+    </section>
+    <!-- 선택 건이 있을 때만 나타나는 하단 고정 바.
+         의도적으로 "전체 선택" 버튼을 두지 않는다 — 이미지를 보지 않고
+         한꺼번에 패스해버리면 검수 데이터 자체가 무의미해지기 때문이다. -->
+    <div id="bulkBar" class="bulk-bar" hidden>
+      <span id="bulkCount" class="bulk-count"></span>
+      <button type="button" id="bulkClear" class="bulk-clear">선택 해제</button>
+      <button type="button" id="bulkPass" class="primary">선택한 건 패스 처리</button>
+    </div>
+  </main>
+
+  <script type="module" src="/static/js/nav-auth.js?v=2"></script>
+  <script type="module" src="/static/js/review.js?v=23"></script>
+</body>
+</html>

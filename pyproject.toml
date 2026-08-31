@@ -1,0 +1,19 @@
+[project]
+name = "sct-data-view"
+version = "0.1.0"
+description = "SCT import 데이터 조회용 로컬 웹페이지"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "bcrypt>=5.0.0",
+    "boto3>=1.34.0",
+    "cryptography>=42.0.0",
+    "fastapi==0.115.6",
+    "itsdangerous>=2.2.0",
+    "openpyxl>=3.1.0",
+    "pymysql==1.1.1",
+    "python-dotenv==1.0.1",
+    "uvicorn[standard]==0.34.0",
+]
+
+[tool.uv]
+package = false
