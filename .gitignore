@@ -4,3 +4,4 @@ __pycache__/
 .env
 .mysql/credentials.txt
 .mysql/data/
+uvicorn_out.log
