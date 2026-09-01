@@ -118,14 +118,90 @@ main {
 .list-head {
   display: flex;
   flex-wrap: wrap;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
   padding: 14px;
   border-bottom: 1px solid #edf0f5;
   background: #fbfcfe;
 }
-.list-title { font-weight: 700; }
+/* 필터 줄 왼쪽 — 검수/난이도 두 줄을 쌓는다. 오른쪽(.data-view-controls,
+   연령대/VLM모델/날짜/검색어)과는 .list-head의 space-between이 갈라준다. */
+.filter-bar-left {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+.filter-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.filter-row-label {
+  min-width: 32px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+.filter-btn-group {
+  display: inline-flex;
+  align-items: center;
+}
+.filter-btn {
+  min-width: 56px;
+  height: 36px;
+  margin-left: -1px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 0;
+  background: #fff;
+  color: #344054;
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.filter-btn:first-child { margin-left: 0; border-radius: 8px 0 0 8px; }
+.filter-btn:last-child { border-radius: 0 8px 8px 0; }
+.filter-btn[aria-pressed="true"] {
+  z-index: 1;
+  border-color: var(--blue);
+  background: var(--blue);
+  color: #fff;
+  font-weight: 700;
+}
+/* 독립 토글(판독불가/부정표현) — 나머지(전체/1~4, 전체/미처리/패스/수정)와
+   달리 상호 배타적이지 않아(동시에 켤 수 있음) 연결된 무리에서 띄워
+   "다른 종류의 선택"임을 모양으로 보여준다. 켜졌을 때 색은 나머지 버튼과
+   같은 파란색이 기본이다 — 부정표현만 .filter-btn-toggle-negative를 더해
+   빨간 계열로 구분한다(아래). */
+.filter-btn-toggle {
+  height: 36px;
+  margin-left: 8px;
+  padding: 0 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  color: #344054;
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.filter-btn-toggle[aria-pressed="true"] {
+  border-color: var(--blue);
+  background: var(--blue);
+  color: #fff;
+  font-weight: 700;
+}
+/* 부정 표현만 — 옅은 빨간 계열로 켜진 상태를 표시한다 (진한 빨강은 피한다). */
+.filter-btn-toggle-negative[aria-pressed="true"] {
+  border-color: #fca5a5;
+  background: #fef2f2;
+  color: #dc2626;
+}
 
 .data-view-controls {
   display: flex;
@@ -215,82 +291,10 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 .range-date-field input { width: 100%; min-width: 0; height: 38px; color: #111827; font-size: 14px; }
 .range-apply-button { grid-column: 1 / -1; width: 100%; height: 38px; }
 
-/* 난이도 다중 선택 (difficulty-filter.js) — 필터바가 이미 붐비므로 알약
-   버튼 5개를 펼쳐두지 않고 버튼 하나로 접어둔다. 열리는 방식은 기간 필터의
-   range-popover와 같다. */
-.level-picker { position: relative; flex: 0 0 auto; }
-.level-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 36px;
-  padding: 0 12px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: #fff;
-  color: var(--text);
-  font-size: 14px;
-  white-space: nowrap;
-  cursor: pointer;
-}
-.level-toggle:hover { background: var(--bg); }
-/* 무엇이 걸려 있는지 접힌 상태에서도 눈에 띄게 한다 */
-.level-picker.has-selection .level-toggle {
-  border-color: var(--blue);
-  background: #eff6ff;
-  color: #1d4ed8;
-  font-weight: 700;
-}
-.level-popover {
-  min-width: 260px;
-  position: absolute;
-  top: calc(100% + 8px);
-  left: 0;
-  z-index: 60;
-  display: grid;
-  gap: 10px;
-  padding: 12px;
-  border: 1px solid #dfe3ea;
-  border-radius: 12px;
-  background: #fff;
-  box-shadow: 0 12px 28px rgba(17, 24, 39, 0.16);
-}
-/* 팝오버 안의 두 구획(난이도 / 판독 불가) — 구분선과 소제목으로 나눠서
-   "판독 불가가 난이도 5"라는 오해가 생기지 않게 한다. */
-.level-section + .level-section {
-  padding-top: 10px;
-  border-top: 1px solid #edf0f5;
-}
-.level-section-title {
-  margin-bottom: 6px;
-  color: var(--muted);
-  font-size: 12px;
-  font-weight: 700;
-}
-/* "판독 불가만" 보는 동안 난이도 구획은 의미가 없어 흐리게 둔다 */
-.level-section.dimmed { opacity: 0.45; }
-
-.level-buttons { display: flex; gap: 6px; }
-.level-modes { display: flex; gap: 6px; }
-.level-mode {
-  flex: 1 1 0;
-  height: 32px;
-  padding: 0 8px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: #fff;
-  color: var(--muted);
-  font-size: 13px;
-  font-weight: 600;
-  white-space: nowrap;
-  cursor: pointer;
-}
-.level-mode:hover { background: var(--bg); }
-.level-mode[aria-pressed="true"] {
-  border-color: var(--blue);
-  background: var(--blue);
-  color: #fff;
-}
+/* 난이도 다중 선택 알약 버튼 — 필터 줄(difficulty-filter.js)과 관리자 판정
+   모달(admin.js) 양쪽이 쓴다. 필터 줄에서는 항상 펼쳐진 한 줄로, 모달에서는
+   "난이도" 필드 안에 그대로 놓인다. */
+.level-buttons { display: flex; gap: 6px; flex-wrap: wrap; }
 .level-btn {
   display: flex;
   flex-direction: column;
@@ -315,16 +319,9 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
   background: var(--blue);
   color: #fff;
 }
-.level-reset {
-  height: 32px;
-  border: none;
-  background: transparent;
-  color: var(--muted);
-  font-size: 13px;
-  font-weight: 600;
-  cursor: pointer;
-}
-.level-reset:hover { color: var(--text); text-decoration: underline; }
+/* "전체"(모두 선택 지름길)와 "판독 불가"(등급 밖 별도 판정) — 큰 숫자 없이
+   글자만 한 줄로 담는다. */
+.level-btn-plain { font-size: 13px; }
 
 /* 결과 0건일 때 어떤 필터 때문인지 보여준다 — 정상적인 필터 조합 결과를
    고장으로 오해하지 않도록(2026-08-24). */
@@ -554,16 +551,6 @@ mark.diff-insert { background: #bbf7d0; color: #166534; }
 .negative-flag-inline input[type="checkbox"] { width: 18px; height: 18px; margin: 0; cursor: pointer; }
 .negative-tag { color: #b91c1c; font-weight: 600; }
 
-.reviewer-select-label {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 13px;
-  color: var(--muted);
-  font-weight: 600;
-}
-.reviewer-select-label select { height: 36px; }
-
 .reviews-summary { display: grid; gap: 8px; margin-top: 6px; font-size: 13px; }
 
 /* "OCR / 검수자 입력" 칸의 구획(질문/OCR/검수자별 줄) 라벨과 구분선
@@ -725,6 +712,8 @@ mark.diff-insert { background: #bbf7d0; color: #166534; }
 @media (max-width: 900px) {
   main { padding: 16px; }
   .data-view-controls { justify-content: flex-start; }
+  .list-head { flex-direction: column; align-items: stretch; }
+  .filter-bar-left { width: 100%; }
 }
 
 /* Admin 진행 현황 요약 (§4.5) */

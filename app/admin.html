@@ -19,42 +19,37 @@
   <main>
     <section class="panel">
       <div class="list-head">
-        <div class="list-title" title="기본값은 &quot;타이핑한 것&quot;입니다. 드롭다운에서 다른 기준으로 바꾸거나 &quot;전체&quot;를 골라 처리 여부와 무관하게 모두 볼 수 있습니다.">검수 레코드</div>
+        <div class="filter-bar-left">
+          <div class="filter-row">
+            <span class="filter-row-label">검수</span>
+            <div class="filter-btn-group" id="reviewStatusGroup" title="검수 의견 상태 기준 필터 — 판독 불가는 &quot;수정&quot;에 포함됩니다(난이도 판독불가로 따로 조회)">
+              <button type="button" class="filter-btn" data-value="all">전체</button>
+              <button type="button" class="filter-btn" data-value="pass">패스</button>
+              <button type="button" class="filter-btn" data-value="typed">수정</button>
+            </div>
+            <button type="button" class="filter-btn-toggle" id="completedOnly">검수완료</button>
+            <button type="button" class="filter-btn-toggle filter-btn-toggle-negative" id="negativeOnly">부정표현</button>
+          </div>
+          <div class="filter-row">
+            <span class="filter-row-label">난이도</span>
+            <div id="difficultyFilter"></div>
+          </div>
+        </div>
         <div class="data-view-controls">
-            <label class="reviewer-select-label">
-            <input type="checkbox" id="negativeOnly" />
-            부정 표현만
-          </label>
-          <select id="reviewStatusFilter" title="검수 의견 상태 기준 필터 — 판독 불가는 &quot;타이핑한 것&quot;에 포함됩니다(난이도 5로 따로 조회)">
-            <option value="typed" selected>타이핑한 것</option>
-            <option value="pass">패스한 것</option>
-            <option value="all">전체 (처리 여부 무관)</option>
-          </select>
-          <div id="difficultyFilter"></div>
           <select id="ageGroupFilter">
             <option value="">전체 연령대</option>
           </select>
           <select id="vlmModelFilter">
             <option value="">전체 VLM 모델</option>
           </select>
-          <select id="reviewerFilter">
-            <option value="">전체 검수자</option>
-          </select>
-          <select id="completionFilter" title="몇 명이 처리했는지 기준 필터 — 검수자 필터와 별개 조건이라 함께 조합할 수 있습니다">
-            <option value="">전체 (완료 여부 무관)</option>
-            <option value="completed">완료 (2명)</option>
-            <option value="needs_second_opinion">진행중 (1명)</option>
-          </select>
           <select id="dateRange" class="range-native-select" aria-hidden="true" tabindex="-1">
             <option value="yesterday">전일</option>
-            <option value="month">최근 1개월</option>
             <option value="all" selected>전체 기간</option>
             <option value="custom">직접 입력</option>
           </select>
           <div class="range-picker">
             <div class="range-actions" data-range-control="dateRange" aria-label="조회 기간">
               <button type="button" class="range-action" data-range-value="yesterday" aria-pressed="false">전일</button>
-              <button type="button" class="range-action" data-range-value="month" aria-pressed="false">최근 1개월</button>
               <button type="button" class="range-action active" data-range-value="all" aria-pressed="true">전체 기간</button>
               <button type="button" class="range-action range-action-custom" data-range-value="custom" aria-pressed="false">📅 직접 입력 ▾</button>
             </div>

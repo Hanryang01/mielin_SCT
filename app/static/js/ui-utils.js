@@ -64,6 +64,69 @@ export function setupImageModal() {
   };
 }
 
+/** 연결된 pill 버튼 그룹을 상호 배타적인 단일 선택으로 묶는다 (2026-09-01) —
+ *  검수 상태 필터(전체/미처리/패스/수정)가 review.js/admin.js 양쪽에서 같은
+ *  모양·동작을 쓴다. 날짜 프리셋(date-range.js)과 같은 시각 언어(.range-action류
+ *  대신 filter-btn류)를 쓰지만, 날짜 계산 같은 도메인 로직이 없어 훨씬 단순하다.
+ *
+ *  @param {{mountId: string, defaultValue: string, onChange: (value: string) => void}} opts
+ *  @returns {{ value: () => string, set: (value: string) => void }}
+ */
+export function bindRadioGroup({ mountId, defaultValue, onChange }) {
+  const mount = document.getElementById(mountId);
+  let value = defaultValue;
+
+  function sync() {
+    mount.querySelectorAll("[data-value]").forEach((btn) => {
+      btn.setAttribute("aria-pressed", String(btn.dataset.value === value));
+    });
+  }
+
+  mount.querySelectorAll("[data-value]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      if (btn.dataset.value === value) return;
+      value = btn.dataset.value;
+      sync();
+      onChange(value);
+    });
+  });
+
+  sync();
+  return {
+    value: () => value,
+    set: (v) => {
+      value = v;
+      sync();
+    },
+  };
+}
+
+/** 독립적으로 켜고 끄는 토글 버튼 — "부정 표현만"처럼 상태 그룹과 나란히
+ *  있지만 동시에 여러 개 켤 수 있는 별개 속성에 쓴다(체크박스를 대체). */
+export function bindToggleButton(id, { defaultValue = false, onChange } = {}) {
+  const el = document.getElementById(id);
+  let value = defaultValue;
+
+  function sync() {
+    el.setAttribute("aria-pressed", String(value));
+  }
+
+  el.addEventListener("click", () => {
+    value = !value;
+    sync();
+    onChange(value);
+  });
+
+  sync();
+  return {
+    value: () => value,
+    set: (v) => {
+      value = v;
+      sync();
+    },
+  };
+}
+
 /** 페이저를 그리는 함수를 만들어 돌려준다.
  *
  *  페이지 상태 변수와 재조회 방법은 화면마다 다르므로(review.js/admin.js가 각자

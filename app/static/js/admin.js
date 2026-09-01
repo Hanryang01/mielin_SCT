@@ -4,6 +4,8 @@ import {
   markedToHtml,
   setupImageModal,
   createPager,
+  bindRadioGroup,
+  bindToggleButton,
 } from "./ui-utils.js?v=2";
 import { bindDateRanges } from "./date-range.js?v=2";
 import { bindDifficultyFilter } from "./difficulty-filter.js?v=5";
@@ -25,33 +27,42 @@ import {
 const tableWrap = document.getElementById("recordTableWrap");
 
 const progressBar = document.getElementById("progressBar");
-// 난이도는 다중 선택 위젯이 대신한다 (difficulty-filter.js) — init에서 연결한다.
-let difficultyFilter = { levels: () => [], unreadable: () => "exclude", reset: () => {} };
-const reviewStatusFilter = document.getElementById("reviewStatusFilter");
-// 부정 표현은 타이핑/OCR다름/패스 중 무엇이든 함께 걸릴 수 있는 별개의
-// 속성이라(상호 배타적인 상태가 아니다), reviewStatusFilter 안에 넣지 않고
-// 검수자 화면(review.html의 negativeOnly)과 같은 방식 — 독립 체크박스로
-// 자유롭게 조합되게 뒀다.
-const negativeOnly = document.getElementById("negativeOnly");
+// 난이도(+판독 불가)는 다중 선택 버튼 줄이 대신한다 (difficulty-filter.js) —
+// init에서 연결한다.
+let difficultyFilter = { levels: () => [], reset: () => {}, setEnabled: () => {} };
+// 검수 상태(전체/패스/수정)도 연결된 버튼 그룹이다 — init에서 연결한다.
+let reviewStatus = { value: () => "typed", set: () => {} };
+// 완료 여부(몇 명이 처리했는지)와 부정 표현은 둘 다 전체/패스/수정과 별개
+// 축이라(상호 배타적인 상태가 아니라 무엇과도 함께 걸릴 수 있다 — "수정 +
+// 완료"도, "패스 + 부정표현"도 있다) 검수 상태 버튼 그룹 안에 넣지 않고
+// 독립 토글 버튼으로 뒀다. 완료 여부는 예전엔 별도 드롭다운(전체/완료/진행중)
+// 이었는데, "진행중"은 진행 현황 카드(loadProgress)에 검수자별로 이미 나오고
+// "전체에서 완료를 뺀 나머지"로도 알 수 있어 굳이 버튼으로 안 두고 "완료만"
+// 켜고 끄는 토글 하나로 줄였다(2026-09-01).
+let completedOnly = { value: () => false, set: () => {} };
+let negativeOnly = { value: () => false, set: () => {} };
 const ageGroupFilter = document.getElementById("ageGroupFilter");
 const vlmModelFilter = document.getElementById("vlmModelFilter");
-const reviewerFilter = document.getElementById("reviewerFilter");
-const completionFilter = document.getElementById("completionFilter");
 const keywordInput = document.getElementById("keyword");
 
-// reviewStatusFilter(단일 드롭다운)의 값 하나가 서버 쪽 불리언 파라미터
-// 하나에 대응한다 — "전체"는 이 중 아무것도 보내지 않는다는 뜻이라 매핑에
-// 없다(main.py get_admin_records 참고).
-// "타이핑한 것"은 검수자 화면과 같은 기준(review_type)이라 **판독 불가를
-// 포함한다**(2026-08-24). 판독 불가만 보려면 난이도 5로 조회한다 — 같은 개념이
-// 드롭다운과 난이도 필터 두 곳에 있으면 서로 다른 숫자를 내서 헷갈렸다.
+// reviewStatus(연결된 버튼 그룹)의 값 하나가 서버 쪽 불리언 파라미터 하나에
+// 대응한다 — "전체"는 이 중 아무것도 보내지 않는다는 뜻이라 매핑에 없다
+// (main.py get_admin_records 참고).
+// "수정"은 검수자 화면과 같은 기준(review_type)이라 **판독 불가를 포함한다**
+// (2026-08-24). 판독 불가만 보려면 난이도 필터에서 판독불가를 고른다 — 같은
+// 개념이 상태 버튼과 난이도 필터 두 곳에 있으면 서로 다른 숫자를 내서 헷갈렸다.
 //
-// "OCR 텍스트와 다른 것"(diff_only)도 뺐다 — 타이핑한 것의 부분집합이라
-// 드롭다운에서 둘을 오가는 의미가 크지 않다는 판단이다. 서버 파라미터는
-// 남아 있어 필요하면 API로 조회할 수 있다.
+// "OCR 텍스트와 다른 것"(diff_only)도 뺐다 — 수정의 부분집합이라 상태 버튼에서
+// 둘을 오가는 의미가 크지 않다는 판단이다. 서버 파라미터는 남아 있어 필요하면
+// API로 조회할 수 있다.
 const REVIEW_STATUS_PARAM = {
   typed: "typed_only",
   pass: "pass_only",
+};
+const REVIEW_STATUS_LABEL = {
+  all: "전체",
+  pass: "패스",
+  typed: "수정",
 };
 
 const PAGE_SIZE = 20;
@@ -457,28 +468,18 @@ function entryKey(entry) {
  *  바로 알려줘야 한다. */
 function activeFilterLabels() {
   const labels = [];
-  if (reviewStatusFilter.value !== "all") {
-    labels.push(
-      `검수 상태: ${reviewStatusFilter.options[reviewStatusFilter.selectedIndex]?.text}`
-    );
+  if (reviewStatus.value() !== "all") {
+    labels.push(`검수 상태: ${REVIEW_STATUS_LABEL[reviewStatus.value()]}`);
   }
   const levels = difficultyFilter.levels();
   if (levels.length) labels.push(`난이도: ${levels.join(", ")}`);
-  if (negativeOnly.checked) labels.push("부정 표현만");
-  const unread = difficultyFilter.unreadable();
-  if (unread === "exclude") labels.push("판독 불가 제외");
-  else if (unread === "only") labels.push("판독 불가만");
+  if (completedOnly.value()) labels.push("검수 완료만");
+  if (negativeOnly.value()) labels.push("부정 표현만");
   if (ageGroupFilter.value) {
     labels.push(`연령대: ${ageGroupFilter.options[ageGroupFilter.selectedIndex]?.text}`);
   }
   if (vlmModelFilter.value) {
     labels.push(`VLM 모델: ${vlmModelFilter.options[vlmModelFilter.selectedIndex]?.text}`);
-  }
-  if (reviewerFilter.value) {
-    labels.push(`검수자: ${reviewerFilter.options[reviewerFilter.selectedIndex]?.text}`);
-  }
-  if (completionFilter.value) {
-    labels.push(`완료 여부: ${completionFilter.options[completionFilter.selectedIndex]?.text}`);
   }
   const start = document.getElementById("dateStart").value;
   const end = document.getElementById("dateEnd").value;
@@ -491,12 +492,11 @@ function activeFilterLabels() {
 
 /** 모든 필터를 기본값으로 되돌리고 다시 조회한다 (review.js resetFilters와 같다). */
 function resetFilters() {
-  reviewStatusFilter.value = "typed";
-  negativeOnly.checked = false;
+  reviewStatus.set("typed");
+  completedOnly.set(false);
+  negativeOnly.set(false);
   ageGroupFilter.value = "";
   vlmModelFilter.value = "";
-  reviewerFilter.value = "";
-  completionFilter.value = "";
   difficultyFilter.reset?.();
   // 기간은 date-range.js가 관리하므로 "전체 기간" 프리셋 버튼을 눌러 되돌린다
   // (입력값만 지우면 pill 버튼의 선택 표시가 남아 상태가 어긋난다).
@@ -570,17 +570,12 @@ function buildQuery() {
   params.set("page_size", String(PAGE_SIZE));
   // 난이도는 여러 개를 반복 파라미터로 보낸다 (?difficulty_level=1&difficulty_level=2)
   for (const level of difficultyFilter.levels()) params.append("difficulty_level", String(level));
-  // 판독 불가 3단 선택 — "포함"은 아무 파라미터도 보내지 않는다는 뜻이다.
-  const unreadable = difficultyFilter.unreadable();
-  if (unreadable === "exclude") params.set("exclude_unreadable", "true");
-  else if (unreadable === "only") params.set("unreadable_only", "true");
-  const statusParam = REVIEW_STATUS_PARAM[reviewStatusFilter.value];
+  const statusParam = REVIEW_STATUS_PARAM[reviewStatus.value()];
   if (statusParam) params.set(statusParam, "true");
-  if (negativeOnly.checked) params.set("negative_only", "true");
+  if (completedOnly.value()) params.set("status", "completed");
+  if (negativeOnly.value()) params.set("negative_only", "true");
   if (ageGroupFilter.value) params.set("age_group", ageGroupFilter.value);
   if (vlmModelFilter.value) params.set("vlm_model", vlmModelFilter.value);
-  if (reviewerFilter.value) params.set("reviewer_id", reviewerFilter.value);
-  if (completionFilter.value) params.set("status", completionFilter.value);
   const start = document.getElementById("dateStart").value;
   const end = document.getElementById("dateEnd").value;
   if (start) params.set("date_start", start);
@@ -697,26 +692,11 @@ async function loadReviewers() {
   // 이름 표를 만들 때는 비활성·삭제된 계정까지 담는다 — 그 계정이 과거에 남긴
   // 검수 의견이 목록에 그대로 나오므로, 이름을 모르면 내부 id가 노출된다.
   reviewerNames = new Map(reviewers.map((r) => [r.id, r.name]));
-  // 반면 고를 수 있는 대상(필터 드롭다운)과 타이핑 줄 자리는 현역 검수자만이다.
-  //
-  // reviewer_id 필터는 검수자 의견 테이블(ocr_review_comments)만 본다
-  // (get_admin_records의 reviewer_id 조건) — 관리자 판정은 완전히 다른
-  // 테이블(ocr_admin_comments, admin_id 컬럼)에 저장되므로, 드롭다운에
-  // 관리자가 있어도 골랐을 때 항상 0건이었다(2026-08-27 제거). "관리자가
-  // 남긴 판정만 모아 보기"는 지금의 reviewer_id 필터와 다른 조건·다른
-  // 동작(다른 필터를 무시할지 등)이 필요한 별도 기능이라, 있는 것처럼
-  // 보이는 죽은 선택지를 없애는 쪽을 택했다.
+  // 타이핑 줄 자리(annotatorOrder, ocrCell)는 현역 검수자만이다.
   const activeAnnotators = reviewers.filter(
     (r) => r.is_active && !r.is_deleted && r.role !== "admin"
   );
   annotatorOrder = activeAnnotators.map((r) => r.id);
-
-  for (const r of activeAnnotators) {
-    const option = document.createElement("option");
-    option.value = String(r.id);
-    option.textContent = r.name;
-    reviewerFilter.appendChild(option);
-  }
 }
 
 async function init() {
@@ -736,6 +716,26 @@ async function init() {
       loadRecords();
     },
   });
+  reviewStatus = bindRadioGroup({
+    mountId: "reviewStatusGroup",
+    defaultValue: "typed",
+    onChange: () => {
+      currentPage = 1;
+      loadRecords();
+    },
+  });
+  completedOnly = bindToggleButton("completedOnly", {
+    onChange: () => {
+      currentPage = 1;
+      loadRecords();
+    },
+  });
+  negativeOnly = bindToggleButton("negativeOnly", {
+    onChange: () => {
+      currentPage = 1;
+      loadRecords();
+    },
+  });
 
   keywordInput.addEventListener("keydown", (event) => {
     if (event.key === "Enter") {
@@ -743,11 +743,7 @@ async function init() {
       loadRecords();
     }
   });
-  negativeOnly.addEventListener("change", () => {
-    currentPage = 1;
-    loadRecords();
-  });
-  [reviewStatusFilter, ageGroupFilter, vlmModelFilter, reviewerFilter, completionFilter].forEach((select) => {
+  [ageGroupFilter, vlmModelFilter].forEach((select) => {
     select.addEventListener("change", () => {
       currentPage = 1;
       loadRecords();

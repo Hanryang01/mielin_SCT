@@ -5,6 +5,8 @@ import {
   markedToHtml,
   setupImageModal,
   createPager,
+  bindRadioGroup,
+  bindToggleButton,
 } from "./ui-utils.js?v=2";
 import { renderDiffHtml } from "./text-diff.js?v=1";
 import { bindDifficultyFilter } from "./difficulty-filter.js?v=5";
@@ -39,13 +41,25 @@ import {
 const tableWrap = document.getElementById("recordTableWrap");
 
 const keywordInput = document.getElementById("keyword");
-const mineFilter = document.getElementById("mineFilter");
-// 난이도 + 판독 불가는 팝오버 위젯이 함께 담당한다 (difficulty-filter.js) —
+// 검수 상태(전체/미처리/패스/수정)는 연결된 버튼 그룹이다 — init에서 연결한다.
+let mineFilter = { value: () => "unreviewed", set: () => {} };
+// 난이도 + 판독 불가는 버튼 줄이 함께 담당한다 (difficulty-filter.js) —
 // init에서 연결한다. 연령대/VLM 모델 필터는 검수자에게 필요 없어 없앴다
 // (검수자는 이미지를 보고 판정만 하므로 모델·연령대로 나눠 작업할 이유가 없다,
 // 2026-08-24). admin 화면에는 §6 분석용으로 그대로 있다.
-let difficultyFilter = { levels: () => [], unreadable: () => "exclude", reset: () => {} };
-const negativeOnlyFilter = document.getElementById("negativeOnly");
+//
+// "미처리"를 보는 동안에는 난이도 필터가 걸 대상 자체가 없다(아직 내가 남긴
+// 판정이 없으므로) — main.py도 mine="unreviewed"일 때 difficulty_level을
+// 조용히 무시한다. 버튼이 눌러도 안 먹히는 것처럼 보이지 않도록 이 상태에서는
+// 난이도 줄 자체를 잠근다(mineFilter 바인딩에서 setEnabled 호출).
+let difficultyFilter = { levels: () => [], reset: () => {}, setEnabled: () => {} };
+let negativeOnlyFilter = { value: () => false, set: () => {} };
+const MINE_FILTER_LABEL = {
+  all: "전체",
+  unreviewed: "미처리",
+  pass: "패스",
+  typing: "수정",
+};
 
 const bulkBar = document.getElementById("bulkBar");
 const bulkCountEl = document.getElementById("bulkCount");
@@ -392,14 +406,12 @@ function renderGrid(items) {
  */
 function activeFilterLabels() {
   const labels = [];
-  const mineText = mineFilter.options[mineFilter.selectedIndex]?.text;
-  if (mineFilter.value !== "all" && mineText) labels.push(`내 처리 상태: ${mineText}`);
+  if (mineFilter.value() !== "all") {
+    labels.push(`내 처리 상태: ${MINE_FILTER_LABEL[mineFilter.value()]}`);
+  }
   const levels = difficultyFilter.levels();
   if (levels.length) labels.push(`난이도: ${levels.join(", ")}`);
-  if (negativeOnlyFilter.checked) labels.push("부정 표현만");
-  const unread = difficultyFilter.unreadable();
-  if (unread === "exclude") labels.push("판독 불가 제외");
-  else if (unread === "only") labels.push("판독 불가만");
+  if (negativeOnlyFilter.value()) labels.push("부정 표현만");
   const start = document.getElementById("dateStart").value;
   const end = document.getElementById("dateEnd").value;
   if (start || end) {
@@ -430,8 +442,9 @@ function render(items) {
 
 /** 모든 필터를 기본값으로 되돌리고 다시 조회한다. */
 function resetFilters() {
-  mineFilter.value = "unreviewed";
-  negativeOnlyFilter.checked = false;
+  mineFilter.set("unreviewed");
+  difficultyFilter.setEnabled(false);
+  negativeOnlyFilter.set(false);
   keywordInput.value = "";
   difficultyFilter.reset?.();
   // 기간은 date-range.js가 관리하므로 "전체 기간" 프리셋 버튼을 눌러 되돌린다
@@ -878,16 +891,12 @@ function buildQuery() {
   params.set("page", String(currentPage));
   params.set("page_size", String(PAGE_SIZE));
   // §4.1 내 처리 상태 필터 (기본: 내가 아직 처리하지 않은 것)
-  params.set("mine", mineFilter.value);
+  params.set("mine", mineFilter.value());
   // 이미지가 없는 레코드(= OCR 텍스트도 없는 빈 레코드)는 검수 대상이 아니다
   params.set("has_image", "true");
   // 난이도는 여러 개를 반복 파라미터로 보낸다 (?difficulty_level=1&difficulty_level=2)
   for (const level of difficultyFilter.levels()) params.append("difficulty_level", String(level));
-  // 판독 불가 3단 선택 — "포함"은 아무 파라미터도 보내지 않는다는 뜻이다.
-  const unreadable = difficultyFilter.unreadable();
-  if (unreadable === "exclude") params.set("exclude_unreadable", "true");
-  else if (unreadable === "only") params.set("unreadable_only", "true");
-  if (negativeOnlyFilter.checked) params.set("negative_only", "true");
+  if (negativeOnlyFilter.value()) params.set("negative_only", "true");
   // 기본이 켜짐이라 대부분의 조회에 붙는다 (§5.1)
   const start = document.getElementById("dateStart").value;
   const end = document.getElementById("dateEnd").value;
@@ -979,6 +988,22 @@ async function init() {
       loadRecords();
     },
   });
+  mineFilter = bindRadioGroup({
+    mountId: "mineFilterGroup",
+    defaultValue: "unreviewed",
+    onChange: (value) => {
+      difficultyFilter.setEnabled(value !== "unreviewed");
+      currentPage = 1;
+      loadRecords();
+    },
+  });
+  difficultyFilter.setEnabled(mineFilter.value() !== "unreviewed");
+  negativeOnlyFilter = bindToggleButton("negativeOnly", {
+    onChange: () => {
+      currentPage = 1;
+      loadRecords();
+    },
+  });
 
   bindDateRanges({
     configs: [
@@ -1010,12 +1035,6 @@ async function init() {
       currentPage = 1;
       loadRecords();
     }
-  });
-  [mineFilter, negativeOnlyFilter].forEach((control) => {
-    control.addEventListener("change", () => {
-      currentPage = 1;
-      loadRecords();
-    });
   });
 
   await loadCurrentUser();
