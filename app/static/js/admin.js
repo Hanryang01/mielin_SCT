@@ -31,7 +31,7 @@ const progressBar = document.getElementById("progressBar");
 // init에서 연결한다.
 let difficultyFilter = { levels: () => [], reset: () => {}, setEnabled: () => {} };
 // 검수 상태(전체/패스/수정)도 연결된 버튼 그룹이다 — init에서 연결한다.
-let reviewStatus = { value: () => "typed", set: () => {} };
+let reviewStatus = { value: () => "all", set: () => {} };
 // 완료 여부(몇 명이 처리했는지)와 부정 표현은 둘 다 전체/패스/수정과 별개
 // 축이라(상호 배타적인 상태가 아니라 무엇과도 함께 걸릴 수 있다 — "수정 +
 // 완료"도, "패스 + 부정표현"도 있다) 검수 상태 버튼 그룹 안에 넣지 않고
@@ -490,33 +490,18 @@ function activeFilterLabels() {
   return labels;
 }
 
-/** 모든 필터를 기본값으로 되돌리고 다시 조회한다 (review.js resetFilters와 같다). */
-function resetFilters() {
-  reviewStatus.set("typed");
-  completedOnly.set(false);
-  negativeOnly.set(false);
-  ageGroupFilter.value = "";
-  vlmModelFilter.value = "";
-  difficultyFilter.reset?.();
-  // 기간은 date-range.js가 관리하므로 "전체 기간" 프리셋 버튼을 눌러 되돌린다
-  // (입력값만 지우면 pill 버튼의 선택 표시가 남아 상태가 어긋난다).
-  document.querySelector('.range-action[data-range-value="all"]')?.click();
-  keywordInput.value = "";
-  currentPage = 1;
-  loadRecords();
-}
-
 function renderTable(items) {
   if (!items.length) {
     const labels = activeFilterLabels();
+    // 필터가 전부 버튼이라 지금 뭐가 켜져 있는지 눈에 바로 보이므로, 한 번에
+    // 되돌리는 "필터 초기화" 버튼은 두지 않는다(2026-09-02) — 되돌리고 싶은
+    // 버튼을 직접 누르면 된다. 이 목록은 "왜 0건인지" 설명만 한다.
     const detail = labels.length
       ? `<div class="empty-filters">적용 중인 필터<ul>${labels
           .map((l) => `<li>${escapeHtml(l)}</li>`)
-          .join("")}</ul></div>
-         <button type="button" id="resetFilters" class="primary">필터 초기화</button>`
+          .join("")}</ul></div>`
       : "";
     tableWrap.innerHTML = `<div class="empty">조회된 데이터가 없습니다.${detail}</div>`;
-    document.getElementById("resetFilters")?.addEventListener("click", resetFilters);
     return;
   }
 
@@ -699,6 +684,13 @@ async function loadReviewers() {
   annotatorOrder = activeAnnotators.map((r) => r.id);
 }
 
+// 필터가 바뀔 때마다 1페이지부터 다시 조회한다 — 검수 상태/난이도/완료/
+// 부정표현/연령대/VLM모델/날짜/검색어 등 거의 모든 컨트롤이 이 두 줄만 한다.
+function refetch() {
+  currentPage = 1;
+  loadRecords();
+}
+
 async function init() {
   setupImageModal();
 
@@ -709,45 +701,20 @@ async function init() {
     loadRecords();
   };
 
-  difficultyFilter = bindDifficultyFilter({
-    mountId: "difficultyFilter",
-    onChange: () => {
-      currentPage = 1;
-      loadRecords();
-    },
-  });
+  difficultyFilter = bindDifficultyFilter({ mountId: "difficultyFilter", onChange: refetch });
   reviewStatus = bindRadioGroup({
     mountId: "reviewStatusGroup",
-    defaultValue: "typed",
-    onChange: () => {
-      currentPage = 1;
-      loadRecords();
-    },
+    defaultValue: "all",
+    onChange: refetch,
   });
-  completedOnly = bindToggleButton("completedOnly", {
-    onChange: () => {
-      currentPage = 1;
-      loadRecords();
-    },
-  });
-  negativeOnly = bindToggleButton("negativeOnly", {
-    onChange: () => {
-      currentPage = 1;
-      loadRecords();
-    },
-  });
+  completedOnly = bindToggleButton("completedOnly", { onChange: refetch });
+  negativeOnly = bindToggleButton("negativeOnly", { onChange: refetch });
 
   keywordInput.addEventListener("keydown", (event) => {
-    if (event.key === "Enter") {
-      currentPage = 1;
-      loadRecords();
-    }
+    if (event.key === "Enter") refetch();
   });
   [ageGroupFilter, vlmModelFilter].forEach((select) => {
-    select.addEventListener("change", () => {
-      currentPage = 1;
-      loadRecords();
-    });
+    select.addEventListener("change", refetch);
   });
 
   bindDateRanges({
@@ -758,14 +725,8 @@ async function init() {
         endId: "dateEnd",
         setPresetInputs: true,
         dispatchChange: false,
-        onPreset: () => {
-          currentPage = 1;
-          loadRecords();
-        },
-        onApply: () => {
-          currentPage = 1;
-          loadRecords();
-        },
+        onPreset: refetch,
+        onApply: refetch,
       },
     ],
     closeOnOutside: true,

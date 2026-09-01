@@ -15,12 +15,15 @@
 // 하나로 흡수해도 결과가 같다 — 오히려 "판독불가 + 4만" 같은, 3단 선택으로는
 // 못 하던 조합까지 자연스럽게 가능해진다.
 
-import { DIFFICULTY_LEVELS as LEVELS } from "./difficulty.js?v=2";
+import {
+  DIFFICULTY_LEVELS as LEVELS,
+  PICKABLE_DIFFICULTY_LEVELS as PICKABLE,
+  UNREADABLE_LEVEL,
+} from "./difficulty.js?v=2";
 
-// 판독 불가를 제외한 기본 선택값 — 예전 3단 선택의 기본값("제외")과 같은
-// 결과를 내도록, 시작할 때는 1~4만 켜둔다.
-const PICKABLE = LEVELS.filter((d) => d.level !== 5);
-const DEFAULT_LEVELS = PICKABLE.map((d) => d.level);
+// admin/review 둘 다 검수 상태·난이도 전부 "전체"로 시작한다(2026-09-01) —
+// 필터를 직관적으로 쉽게 바꿀 수 있으니, 특정 값을 기본으로 숨겨두기보다는
+// 열자마자 전체를 보여주고 필요할 때 좁히는 쪽으로 통일했다.
 const ALL_LEVELS = LEVELS.map((d) => d.level);
 
 /**
@@ -35,7 +38,7 @@ export function bindDifficultyFilter({ mountId, onChange }) {
     return { levels: () => [], reset: () => {}, setEnabled: () => {} };
   }
 
-  const selected = new Set(DEFAULT_LEVELS);
+  const selected = new Set(ALL_LEVELS);
 
   // "전체~4"는 검수 상태 줄(전체/패스/수정)과 같은 연결된 pill 그룹으로 묶는다
   // — 한 자리 안에서 갈라지는 값들이라는 걸 모양으로도 보여준다. 판독 불가는
@@ -51,41 +54,63 @@ export function bindDifficultyFilter({ mountId, onChange }) {
         <button type="button" class="filter-btn" data-level="${d.level}" title="${d.level} ${d.short}">${d.level} ${d.short}</button>`
       ).join("")}
     </div>
-    <button type="button" class="filter-btn-toggle" data-level="5" title="판독 불가">판독불가</button>
+    <button type="button" class="filter-btn-toggle" data-level="${UNREADABLE_LEVEL}" title="판독 불가">판독불가</button>
   `;
 
   const allButton = mount.querySelector("[data-all]");
 
+  const isAllSelected = () => selected.size === ALL_LEVELS.length;
+  function selectAll() {
+    selected.clear();
+    ALL_LEVELS.forEach((l) => selected.add(l));
+  }
+
+  // "전체"가 켜진 상태(=5개 다 선택)는 실제 값이 아니라 "다 선택돼 있다"는
+  // 파생 상태라서, 그동안은 개별 버튼도 함께 눌린 것처럼 보였다. 그런데 그
+  // 상태에서 개별 버튼 하나를 누르면 안 건드린 나머지가 화면에 갑자기
+  // 나타나는 것처럼 보여 혼란스러웠다(2026-09-01 지적). 그래서 "전체" 상태를
+  // 벗어나는 첫 클릭은 토글이 아니라 **그 값 하나로 교체**한다 — 결과가
+  // 클릭한 버튼 하나뿐이라 다른 버튼이 따라 바뀌는 일이 없다.
   function syncButtons() {
+    const allSelected = isAllSelected();
     mount.querySelectorAll("[data-level]").forEach((b) => {
-      b.setAttribute("aria-pressed", String(selected.has(Number(b.dataset.level))));
+      b.setAttribute(
+        "aria-pressed",
+        String(!allSelected && selected.has(Number(b.dataset.level)))
+      );
     });
-    allButton.setAttribute("aria-pressed", String(selected.size === ALL_LEVELS.length));
+    allButton.setAttribute("aria-pressed", String(allSelected));
   }
 
   mount.querySelectorAll("[data-level]").forEach((btn) => {
     btn.addEventListener("click", () => {
       const level = Number(btn.dataset.level);
-      if (selected.has(level)) selected.delete(level);
-      else selected.add(level);
-      // 전부 꺼진 상태는 만들지 않는다 — 결과는 "전체"인데 화면은 아무것도
-      // 안 골라진 것처럼 보여 가장 헷갈리는 조합이기 때문이다.
-      if (!selected.size) DEFAULT_LEVELS.forEach((l) => selected.add(l));
+      if (isAllSelected()) {
+        selected.clear();
+        selected.add(level);
+      } else if (selected.has(level)) {
+        selected.delete(level);
+        // 마지막 하나까지 꺼서 전부 빈 상태가 되면 "전체"로 되돌린다 — 아무
+        // 것도 안 고른 상태를 별도로 두지 않고, 좁혔다가 완전히 놓으면 다시
+        // 넓어지는 흐름이 자연스럽기 때문이다.
+        if (!selected.size) selectAll();
+      } else {
+        selected.add(level);
+      }
       syncButtons();
       onChange();
     });
   });
 
   allButton.addEventListener("click", () => {
-    if (selected.size === ALL_LEVELS.length) return;
-    ALL_LEVELS.forEach((l) => selected.add(l));
+    if (isAllSelected()) return;
+    selectAll();
     syncButtons();
     onChange();
   });
 
   function reset(notify = true) {
-    selected.clear();
-    DEFAULT_LEVELS.forEach((l) => selected.add(l));
+    selectAll();
     syncButtons();
     if (notify) onChange();
   }
@@ -104,7 +129,7 @@ export function bindDifficultyFilter({ mountId, onChange }) {
   return {
     // 1~5가 전부 켜져 있으면 빈 배열 = 난이도 필터 미적용. 나열해 보내면
     // 난이도 값이 없는 건(미처리 포함)이 조용히 빠지기 때문이다.
-    levels: () => (selected.size === ALL_LEVELS.length ? [] : [...selected].sort()),
+    levels: () => (isAllSelected() ? [] : [...selected].sort()),
     reset: () => reset(false),
     setEnabled,
   };

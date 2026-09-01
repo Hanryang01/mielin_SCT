@@ -38,8 +38,8 @@ header.app-header h1 {
    묶어서 이 클래스를 붙인다 — 각자 따로 sticky를 걸면 둘 다 top:0을 다투다
    겹쳐버리므로, 감싸는 요소 하나만 sticky로 두고 내부 순서는 평범한 문서
    흐름에 맡긴다. review.html은 header 하나뿐이라 바로 붙인다.
-   팝오버(z-index 60 이상, range-popover/level-popover)보다는 낮게 둬서
-   그 위에 눌려 보이지 않게 한다. */
+   팝오버(z-index 60 이상, range-popover)보다는 낮게 둬서 그 위에 눌려
+   보이지 않게 한다. */
 .sticky-top {
   position: sticky;
   top: 0;
@@ -149,12 +149,13 @@ main {
   display: inline-flex;
   align-items: center;
 }
-.filter-btn {
-  min-width: 56px;
+/* .filter-btn(검수/난이도 줄)과 .range-action(날짜 프리셋, 아래)은 같은
+   "연결된 pill 그룹" 모양이라 공통 선언을 합쳐 쓴다 — border/padding/height는
+   기본 button 규칙(위)과 이미 같은 값이라 따로 안 적는다. */
+.filter-btn,
+.range-action {
   height: 36px;
   margin-left: -1px;
-  padding: 0 12px;
-  border: 1px solid var(--line);
   border-radius: 0;
   background: #fff;
   color: #344054;
@@ -163,9 +164,13 @@ main {
   white-space: nowrap;
   cursor: pointer;
 }
-.filter-btn:first-child { margin-left: 0; border-radius: 8px 0 0 8px; }
-.filter-btn:last-child { border-radius: 0 8px 8px 0; }
-.filter-btn[aria-pressed="true"] {
+.filter-btn:first-child,
+.range-action:first-child { margin-left: 0; border-radius: 8px 0 0 8px; }
+.filter-btn:last-child,
+.range-action:last-child { border-radius: 0 8px 8px 0; }
+.filter-btn { min-width: 56px; }
+.filter-btn[aria-pressed="true"],
+.range-action.active {
   z-index: 1;
   border-color: var(--blue);
   background: var(--blue);
@@ -181,7 +186,6 @@ main {
   height: 36px;
   margin-left: 8px;
   padding: 0 14px;
-  border: 1px solid var(--line);
   border-radius: 8px;
   background: #fff;
   color: #344054;
@@ -241,28 +245,8 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
   align-items: center;
   flex: 0 0 auto;
 }
-.range-action {
-  position: relative;
-  min-width: 72px;
-  height: 36px;
-  margin-left: -1px;
-  border-radius: 0;
-  background: #fff;
-  color: #344054;
-  font-size: 13px;
-  font-weight: 500;
-  white-space: nowrap;
-  cursor: pointer;
-}
-.range-action:first-child { margin-left: 0; border-radius: 8px 0 0 8px; }
-.range-action:last-child { border-radius: 0 8px 8px 0; }
-.range-action.active {
-  z-index: 1;
-  border-color: var(--blue);
-  background: var(--blue);
-  color: #fff;
-  font-weight: 700;
-}
+/* height/color/font 등 공통 pill 스타일은 .filter-btn과 함께 위에서 선언한다. */
+.range-action { position: relative; min-width: 72px; }
 .range-action-custom { min-width: 88px; }
 
 .range-popover {
@@ -291,9 +275,9 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 .range-date-field input { width: 100%; min-width: 0; height: 38px; color: #111827; font-size: 14px; }
 .range-apply-button { grid-column: 1 / -1; width: 100%; height: 38px; }
 
-/* 난이도 다중 선택 알약 버튼 — 필터 줄(difficulty-filter.js)과 관리자 판정
-   모달(admin.js) 양쪽이 쓴다. 필터 줄에서는 항상 펼쳐진 한 줄로, 모달에서는
-   "난이도" 필드 안에 그대로 놓인다. */
+/* 난이도 다중 선택 알약 버튼 — 관리자 판정 모달(admin.js의 openAdminCommentModal)의
+   "난이도" 필드가 쓴다. 필터 줄(difficulty-filter.js)은 검수 상태 줄과 같은
+   .filter-btn/.filter-btn-group을 쓴다(아래 별도 정의). */
 .level-buttons { display: flex; gap: 6px; flex-wrap: wrap; }
 .level-btn {
   display: flex;
@@ -319,9 +303,6 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
   background: var(--blue);
   color: #fff;
 }
-/* "전체"(모두 선택 지름길)와 "판독 불가"(등급 밖 별도 판정) — 큰 숫자 없이
-   글자만 한 줄로 담는다. */
-.level-btn-plain { font-size: 13px; }
 
 /* 결과 0건일 때 어떤 필터 때문인지 보여준다 — 정상적인 필터 조합 결과를
    고장으로 오해하지 않도록(2026-08-24). */

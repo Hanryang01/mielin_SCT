@@ -14,7 +14,6 @@ export function presetCalendarRange(value, now = new Date()) {
   const [year, month, day] = todayValue.split("-").map(Number);
   const start = new Date(Date.UTC(year, month - 1, day));
   const end = new Date(Date.UTC(year, month - 1, day));
-  if (value === "month") start.setUTCDate(start.getUTCDate() - 30);
   if (value === "yesterday") {
     start.setUTCDate(start.getUTCDate() - 1);
     end.setUTCDate(end.getUTCDate() - 1);

@@ -74,6 +74,9 @@ export function setupImageModal() {
  */
 export function bindRadioGroup({ mountId, defaultValue, onChange }) {
   const mount = document.getElementById(mountId);
+  if (!mount) {
+    return { value: () => defaultValue, set: () => {} };
+  }
   let value = defaultValue;
 
   function sync() {
@@ -105,6 +108,9 @@ export function bindRadioGroup({ mountId, defaultValue, onChange }) {
  *  있지만 동시에 여러 개 켤 수 있는 별개 속성에 쓴다(체크박스를 대체). */
 export function bindToggleButton(id, { defaultValue = false, onChange } = {}) {
   const el = document.getElementById(id);
+  if (!el) {
+    return { value: () => defaultValue, set: () => {} };
+  }
   let value = defaultValue;
 
   function sync() {

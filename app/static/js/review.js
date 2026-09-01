@@ -424,34 +424,21 @@ function activeFilterLabels() {
 function render(items) {
   if (!items.length) {
     const labels = activeFilterLabels();
+    // 필터가 전부 버튼이라 지금 뭐가 켜져 있는지 눈에 바로 보이므로, 한 번에
+    // 되돌리는 "필터 초기화" 버튼은 두지 않는다(2026-09-02) — 되돌리고 싶은
+    // 버튼을 직접 누르면 된다. 이 목록은 "왜 0건인지" 설명만 한다.
     const detail = labels.length
       ? `<div class="empty-filters">적용 중인 필터<ul>${labels
           .map((l) => `<li>${escapeHtml(l)}</li>`)
-          .join("")}</ul></div>
-         <button type="button" id="resetFilters" class="primary">필터 초기화</button>`
+          .join("")}</ul></div>`
       : "";
     tableWrap.innerHTML = `<div class="empty">조회된 데이터가 없습니다.${detail}</div>`;
-    document.getElementById("resetFilters")?.addEventListener("click", resetFilters);
     updateBulkBar();
     return;
   }
   renderGrid(items);
   bindRowActions(items);
   updateBulkBar();
-}
-
-/** 모든 필터를 기본값으로 되돌리고 다시 조회한다. */
-function resetFilters() {
-  mineFilter.set("unreviewed");
-  difficultyFilter.setEnabled(false);
-  negativeOnlyFilter.set(false);
-  keywordInput.value = "";
-  difficultyFilter.reset?.();
-  // 기간은 date-range.js가 관리하므로 "전체 기간" 프리셋 버튼을 눌러 되돌린다
-  // (입력값만 지우면 pill 버튼의 선택 표시가 남아 상태가 어긋난다).
-  document.querySelector('.range-action[data-range-value="all"]')?.click();
-  currentPage = 1;
-  loadRecords();
 }
 
 // ============================================================
@@ -974,6 +961,13 @@ async function loadCurrentUser() {
   currentUser = await res.json();
 }
 
+// 필터가 바뀔 때마다 1페이지부터 다시 조회한다 — 검수 상태/난이도/부정표현/
+// 날짜/검색어 등 거의 모든 컨트롤이 이 두 줄만 한다.
+function refetch() {
+  currentPage = 1;
+  loadRecords();
+}
+
 async function init() {
   setupImageModal();
 
@@ -981,29 +975,17 @@ async function init() {
   // 목록만 다시 불러온다(2026-08-31, "조회" 버튼을 대체).
   window.__refreshCurrentView = () => loadRecords();
 
-  difficultyFilter = bindDifficultyFilter({
-    mountId: "difficultyFilter",
-    onChange: () => {
-      currentPage = 1;
-      loadRecords();
-    },
-  });
+  difficultyFilter = bindDifficultyFilter({ mountId: "difficultyFilter", onChange: refetch });
   mineFilter = bindRadioGroup({
     mountId: "mineFilterGroup",
     defaultValue: "unreviewed",
     onChange: (value) => {
       difficultyFilter.setEnabled(value !== "unreviewed");
-      currentPage = 1;
-      loadRecords();
+      refetch();
     },
   });
   difficultyFilter.setEnabled(mineFilter.value() !== "unreviewed");
-  negativeOnlyFilter = bindToggleButton("negativeOnly", {
-    onChange: () => {
-      currentPage = 1;
-      loadRecords();
-    },
-  });
+  negativeOnlyFilter = bindToggleButton("negativeOnly", { onChange: refetch });
 
   bindDateRanges({
     configs: [
@@ -1013,14 +995,8 @@ async function init() {
         endId: "dateEnd",
         setPresetInputs: true,
         dispatchChange: false,
-        onPreset: () => {
-          currentPage = 1;
-          loadRecords();
-        },
-        onApply: () => {
-          currentPage = 1;
-          loadRecords();
-        },
+        onPreset: refetch,
+        onApply: refetch,
       },
     ],
     closeOnOutside: true,
@@ -1031,10 +1007,7 @@ async function init() {
   bulkPassBtn.addEventListener("click", runBulkPass);
 
   keywordInput.addEventListener("keydown", (event) => {
-    if (event.key === "Enter") {
-      currentPage = 1;
-      loadRecords();
-    }
+    if (event.key === "Enter") refetch();
   });
 
   await loadCurrentUser();
