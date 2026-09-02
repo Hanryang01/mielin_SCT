@@ -72,6 +72,15 @@ app = FastAPI(title="SCT 데이터 조회", version="0.1.0")
 if not settings.auth.session_secret:
     raise RuntimeError("SESSION_SECRET_KEY가 설정되어 있지 않습니다 (app/.env 확인)")
 
+# 비밀번호 없이 접속 대상만 찍는다 — 잘못된 환경(.env)으로 기동됐는지
+# 시작 로그만 보고 바로 식별하기 위함.
+print(
+    f"[startup] APP_LEVEL={settings.app_level} "
+    f"MYSQL={settings.mysql.host}:{settings.mysql.port}/{settings.mysql.database} "
+    f"REVIEW_MYSQL={settings.review_mysql.host}:{settings.review_mysql.port}"
+    f"/{settings.review_mysql.database}"
+)
+
 app.add_middleware(
     SessionMiddleware,
     secret_key=settings.auth.session_secret,

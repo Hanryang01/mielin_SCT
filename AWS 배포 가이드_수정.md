@@ -17,7 +17,7 @@
 | `mielin` DB 접근 | 원격 `43.201.172.24:3306` | 같은 인스턴스이므로 **`localhost`/`127.0.0.1`** |
 | `ocr_review` 데이터 위치 | 신규 EC2에 별도 DB(`ocr_review`)로 새로 생성 | **`mielin` DB 안에 테이블로 추가** (별도 DB 아님) |
 | MySQL 설치·설정 | 처음부터 설치·`mysql_secure_installation` 진행 | **이미 구성되어 운영 중 — 설치·재시작·재부팅 설정 불필요** |
-| DB 계정 | 앱 전용 신규 계정(`sct_app`) 생성 | **기존 mielin 접속 계정을 그대로 사용 — 신규 생성 불필요** (단, 새 테이블에 대한 권한만 확인) |
+| DB 계정 | 앱 전용 신규 계정(`sct_app`) 생성 | 최소 권한 원칙에 따라 **MYSQL_USER(SELECT 전용)와 REVIEW_MYSQL_USER(검수 테이블 한정)를 분리 생성** — 아래 "DB 계정과 권한" 참고 |
 | 웹 접속 통제 | 내부망/VPN 대역 허용 | **허용된 IP 화이트리스트** 기반 접근 |
 
 > 참고: `mielin` 원격 주소로 알려진 `43.201.172.24`가 사실 이번에 배포하는
@@ -26,25 +26,43 @@
 
 ---
 
-## 문서 검토 결과 — 확정된 것 / 확인이 더 필요한 것
+## 소스 코드 확인 결과 (더 이상 "확인 필요" 아님)
 
-이번 개정에서 위 6가지 제보 내용은 문서 전반에 반영·확정했습니다. 다만 아래
-항목들은 **실제 소스 코드나 서버 상태를 직접 보지 않고는 확정할 수 없어서**,
-각 단계에 "확인 필요" 형태로 남겨뒀습니다. 배포 담당자가 진행하면서 반드시
-짚고 넘어가야 합니다.
+이전 개정판에서 "소스를 봐야 확정할 수 있다"고 남겨뒀던 항목을 실제 코드
+기준으로 확정합니다.
+
+- **`MYSQL_*`와 `REVIEW_MYSQL_*`는 완전히 독립된 두 개의 pymysql 커넥션**입니다.
+  `app/mysql_reader.py`의 `MysqlReader`(SCT 원본, `app/client.py`의
+  `SctClient`가 사용)와 `app/review_client.py`의 `ReviewDbClient`(OCR 검수)로
+  나뉘어 있고, 커넥션 풀이나 커넥션 객체를 공유하지 않습니다. 이전 문서가
+  언급한 `app/db.py`는 존재하지 않습니다 — 실제 파일명은 위 두 개입니다.
+- **`MysqlReader`는 코드 레벨에서 SELECT만 허용**합니다(`select_all()`이
+  `SELECT`로 시작하지 않는 문장을 받으면 예외를 던집니다). `app/queries/sct_data.py`에도
+  SELECT 문 외에는 없습니다. 즉 `MYSQL_USER`가 DB 권한상 쓰기 권한을 갖고
+  있어도 이 앱 코드는 절대 쓰지 않지만, 그래도 계정 자체를 SELECT 전용으로
+  발급하는 것을 원칙으로 합니다(방어 심층화 + 실수 방지).
+- **`ReviewDbClient`는 SELECT/INSERT/UPDATE만 쓰고 DELETE는 전혀 쓰지
+  않습니다** — 검수 기록은 append-only 설계입니다(`app/queries/ocr_review.py`
+  확인 완료).
+- 이번 배포 작업으로 **APP_LEVEL(dev/prod) 환경 분리**가 추가됐습니다.
+  `APP_LEVEL=prod`일 때는 앱이 시작 시점에 `REVIEW_MYSQL_HOST`/`REVIEW_MYSQL_PORT`
+  값을 무시하고 `MYSQL_HOST`/`MYSQL_PORT`를 그대로 재사용하도록
+  `app/config.py`에 코드로 강제되어 있습니다(운영자가 두 값을 손으로 맞추다
+  어긋나는 사고를 막기 위함). `REVIEW_MYSQL_USER`/`PASSWORD`/`DATABASE`는
+  계정·권한 분리를 위해 dev/prod 모두 항상 독립적으로 설정합니다. 자세한 내용은
+  아래 "APP_LEVEL 환경 분리" 절 참고.
+- 이번 개정 결과 **API·SQL 쿼리·필터·정렬·페이지네이션·집계·인증 동작은
+  전혀 변경되지 않았습니다** — 위 APP_LEVEL 도입은 접속 설정 로딩 단계에만
+  영향을 주고, 라우트/쿼리 코드는 그대로입니다.
+
+여전히 배포 담당자가 서버 상태를 직접 보고 확인해야 하는 항목만 남습니다:
 
 | # | 확인 필요 사항 | 해당 단계 |
 |---|---|---|
-| 1 | `43.201.172.24`가 실제로 이번 배포 EC2 자신의 IP인지 | 상단 참고, 0단계 |
-| 2 | `mielin` 접속 계정이 새 검수용 테이블에 대해 `CREATE`/`SELECT`/`INSERT`/`UPDATE` 권한을 갖는지 (`SHOW GRANTS`로 확인) | 0, 2단계 |
-| 3 | `mielin` DB 안에 `ocr_reviewers` 등과 이름이 겹치는 기존 테이블이 없는지 | 0, 3단계 |
-| 4 | 앱 코드가 `MYSQL_*`/`REVIEW_MYSQL_*`를 완전히 독립된 두 커넥션으로 쓰는지 — 값만 맞추면 되는지, 커넥션 통합 리팩터링이 필요한지 | 5단계 |
-| 5 | `mielin` DB에 이미 백업 정책(RDS 스냅샷 등)이 있는지, 있다면 새 cron 백업이 중복되지 않는지 | 10단계 |
-
-위 5가지는 "제가 검토를 완료해 결론 낸 것"이 아니라 **"코드/서버를 직접 보지
-않는 한 이 문서만으로는 결론 낼 수 없어 확인 필요로 남긴 것"**이라는 점을
-분명히 해둡니다. 실제 프로젝트 소스와 서버 접근 권한이 주어지면 이 항목들도
-마저 검증해 문서를 확정할 수 있습니다.
+| 1 | `43.201.172.24`가 실제로 이번 배포 EC2 자신의 IP인지 | 0단계 |
+| 2 | `mielin` 접속 계정/신규 계정이 필요한 권한을 정확히 갖는지 (`SHOW GRANTS`로 확인) | 2단계 |
+| 3 | `mielin` DB 안에 이관 대상 5개 테이블·1개 뷰와 이름이 겹치는 기존 객체가 없는지 | 3단계 |
+| 4 | `mielin` DB에 이미 백업 정책(RDS 스냅샷 등)이 있는지, 있다면 새 cron 백업이 중복되지 않는지 | 11단계 |
 
 ---
 
@@ -53,32 +71,30 @@
 ### 로컬 개발 환경 (지금)
 
 ```text
-[ 로컬 Windows PC ]
+[ 로컬 Windows PC ]  APP_LEVEL=dev
 
   개발자 브라우저
        │  http://localhost:8011
        ▼
   FastAPI 앱 (uvicorn)  ── 평상시 요청 처리 경로 ──
        │
-       ├──▶ MySQL, 127.0.0.1 (로컬 접속)
-       │      └ ocr_review DB  ─ 검수 데이터
+       ├──▶ MySQL, REVIEW_MYSQL_HOST (로컬 또는 별도 검수용 DB)
+       │      └ 검수 데이터 (운영 mielin과 무관한 DB/계정)
        │
-       └──▶ mielin 서버 MySQL, 43.201.172.24 (원격 접속, 3306)
+       └──▶ mielin 서버 MySQL, MYSQL_HOST (SELECT 전용 계정 권장 — 운영
+              mielin 원본 또는 그 복제본/스냅샷)
               └ SCT 원본 데이터
 
   이미지 적재 작업 (SCT 이미지 최초 적재 시에만 실행 — 상시 트래픽 아님)
        │
        └──▶ S3 (HTTPS)
               └ cmaps-hub 버킷 ─ SCT 이미지 원본 저장소
-                 (다운로드 → 로컬 저장 + DB에 경로 기록, 이후엔 로컬 파일로 서빙)
 ```
 
-특징: DB가 **두 군데**로 나뉘어 있습니다 — 검수 데이터(`ocr_review`)는 로컬
-MySQL, SCT 원본 데이터는 원격 `mielin` 서버. 그래서 `app/.env`에도
-`MYSQL_*`(mielin, 원격 접속)와 `REVIEW_MYSQL_*`(로컬 접속)가 서로 다른 값으로
-따로 존재합니다. **S3(`cmaps-hub`)는 원본 저장소일 뿐, 앱이 평상시 요청마다
-접근하지 않습니다** — SCT 이미지를 내려받아 적재하고 DB에 경로를 기록하는
-시점에만 접근합니다.
+특징: DB가 **두 군데**로 나뉘어 있습니다 — 검수 데이터는 dev 전용 DB,
+SCT 원본 데이터는 운영 mielin(또는 복제본). `app/.env`에 `APP_LEVEL=dev`가
+있으면 앱이 `REVIEW_MYSQL_*` 값을 그대로 사용합니다. **S3(`cmaps-hub`)는
+원본 저장소일 뿐, 앱이 평상시 요청마다 접근하지 않습니다.**
 
 ### EC2 배포 후 (이번 배포)
 
@@ -87,31 +103,53 @@ MySQL, SCT 원본 데이터는 원격 `mielin` 서버. 그래서 `app/.env`에�
        │  http://<EC2 IP>:8011
        │  보안그룹 인바운드로 제한
        ▼
-[ EC2 인스턴스 — mielin 서버, 기존 ]
+[ EC2 인스턴스 — mielin 서버, 기존 ]  APP_LEVEL=prod
 
   FastAPI 앱 (uvicorn, systemd 관리)  ── 평상시 요청 처리 경로 ──
        │
        └──▶ MySQL, 127.0.0.1 (로컬 접속 — 원격 접속 아님)
-              └ mielin DB  ─ SCT 원본 데이터 + ocr_review 관련 테이블 (통합)
+              └ mielin DB  ─ SCT 원본 데이터 + OCR 검수 테이블 (같은 DB,
+                 계정은 MYSQL_USER/REVIEW_MYSQL_USER로 분리 유지)
 
   이미지 적재 작업 (SCT 이미지 최초 적재 시에만 실행 — 상시 트래픽 아님)
        │
        └──▶ S3 (HTTPS)
-              └ cmaps-hub 버킷 ─ SCT 이미지 원본 저장소
-                 (다운로드 → EC2에 저장 + DB에 경로 기록, 이후엔 로컬 파일로 서빙)
+              └ cmaps-hub 버킷
 ```
 
-특징: 앱과 두 데이터(원본 + 검수)가 **한 인스턴스, 한 MySQL**로 모입니다.
-앱 입장에서는 두 접속 모두 `127.0.0.1`(로컬)로 바뀌고, 검수 관련 테이블은
-별도 DB가 아니라 **`mielin` DB 안에** 같이 생깁니다. 외부 접근 통제는
-VPN 대역이 아니라 **허용된 IP만 통과시키는 화이트리스트**로 이루어집니다.
-**S3 접근도 로컬과 동일하게 상시 경로가 아니라 이미지 적재 시점에만** 발생하므로,
-평상시 EC2 아웃바운드 트래픽은 DB(로컬)만 오가고 S3 트래픽은 적재 작업을 돌릴
-때만 발생합니다.
+특징: 앱과 두 데이터(원본 + 검수)가 **한 인스턴스, 한 MySQL, 한 mielin DB**로
+모입니다. `APP_LEVEL=prod`이면 코드가 REVIEW 커넥션의 host/port를 MYSQL_*과
+자동으로 맞춰주므로 `.env`에 같은 값을 두 번 입력하다 어긋나는 사고가 나지
+않습니다. 계정(`MYSQL_USER` vs `REVIEW_MYSQL_USER`)과 커넥션 객체
+(`MysqlReader` vs `ReviewDbClient`)는 여전히 분리되어 있습니다 — 합쳐지는 건
+"같은 서버·같은 DB를 가리킨다"는 사실뿐입니다.
 
-**두 그림을 나란히 비교하면**: 로컬은 화살표가 3방향(로컬 DB / 원격 mielin /
-S3)으로 흩어지지만, EC2에서는 DB 화살표 2개가 **하나로 합쳐집니다** — 이게
-이번 배포에서 `.env`와 DB 이관 작업이 필요한 이유입니다.
+---
+
+## dev/운영 DB 연결 표
+
+| | `MYSQL_*` (SCT 원본, 읽기 전용) | `REVIEW_MYSQL_*` (OCR 검수) |
+|---|---|---|
+| **dev** (`APP_LEVEL=dev`) | 운영 mielin 원본 또는 그 복제본/스냅샷을 SELECT 전용 계정으로 연결 (문서에서 우선 권장). 값은 `.env`에 적은 그대로 사용 | 운영과 무관한 별도 DB(로컬 MySQL 등)를 `REVIEW_MYSQL_HOST/PORT`에 적은 그대로 사용. **운영 mielin을 직접 가리키지 않는다** |
+| **prod** (`APP_LEVEL=prod`) | `127.0.0.1`, DB `mielin`, SELECT 전용 계정 | `REVIEW_MYSQL_HOST/PORT`는 앱이 **무시하고 `MYSQL_HOST/PORT`를 그대로 재사용**(코드 강제) → 결국 `127.0.0.1`/`mielin`. `REVIEW_MYSQL_USER/PASSWORD/DATABASE`는 독립적으로 설정, DB명도 `mielin`으로 맞춤 |
+
+---
+
+## APP_LEVEL 환경 분리
+
+- `app/.env` **하나의 파일** 안에 `APP_LEVEL=dev` 또는 `APP_LEVEL=prod`를
+  적습니다 — 파일을 두 개로 나누지 않습니다.
+- 값이 없거나 `dev`/`prod`가 아니면 **앱이 기동 자체를 거부**합니다
+  (`app/config.py`). 기본값을 `prod`로 두지 않으므로, 값을 깜빡 지워도
+  조용히 운영 모드로 뜨는 사고는 나지 않습니다 — 대신 즉시 에러를 내고 죽습니다.
+- 로컬 개발 실행: `app/.env`에 `APP_LEVEL=dev`를 적어두고 평소처럼
+  `uv run uvicorn app.main:app --reload --port 8011`로 실행합니다.
+- 운영 systemd 서비스: unit 파일에 `Environment=APP_LEVEL=prod`를 명시합니다
+  (8단계 참고). systemd가 이미 프로세스 환경변수로 넘겨주므로 `.env`
+  파일에도 같은 값을 적어 일치시켜 둡니다(둘 다 `prod`).
+- 시작 로그에 `APP_LEVEL`과 두 DB의 `host:port/database`만 비밀번호 없이
+  찍힙니다 — `sudo journalctl -u sct-review -n 20`으로 첫 줄만 봐도 잘못된
+  `.env`로 떴는지(예: 운영인데 dev 값) 바로 알 수 있습니다.
 
 ---
 
@@ -121,10 +159,11 @@ S3)으로 흩어지지만, EC2에서는 DB 화살표 2개가 **하나로 합쳐�
 - [ ] SSH 접속 정보(퍼블릭/프라이빗 IP, `.pem` 키) 확보
 - [ ] 이 앱을 사용할 사람들의 IP 목록을 확보해 보안그룹 화이트리스트 등록 요청
 - [ ] `mielin` DB 접속에 이미 쓰이고 있는 계정이 어떤 권한을 갖고 있는지 확인
-      (새 테이블 생성용 `CREATE`, 이후 운영용 `SELECT`/`INSERT`/`UPDATE`)
 - [ ] 로컬 PC → EC2로 파일을 옮길 수단(scp) 사용 가능한지
-- [ ] 기존 `mielin` DB에 `ocr_review_*` 등과 이름이 겹치는 테이블이 없는지
-      (3단계 이관 전에 한 번 훑어보기)
+- [ ] 기존 `mielin` DB에 이관 대상 5개 테이블(`ocr_admin_comments`,
+      `ocr_negative_keywords`, `ocr_review_comments`, `ocr_review_edits`,
+      `ocr_reviewers`)과 뷰(`v_sct_review_status`)와 이름이 겹치는 기존
+      객체가 없는지 (3단계에서 다시 한 번 확인)
 
 ---
 
@@ -133,17 +172,17 @@ S3)으로 흩어지지만, EC2에서는 DB 화살표 2개가 **하나로 합쳐�
 ```bash
 ssh -i <key.pem> ubuntu@<EC2 퍼블릭 IP>
 
-sudo apt update && sudo apt upgrade -y
+sudo apt update
 sudo apt install -y build-essential pkg-config default-libmysqlclient-dev git
 ```
 
+> ⚠️ **`sudo apt upgrade -y`는 이 배포 절차에 포함하지 않습니다.** 이
+> 인스턴스는 `mielin`을 함께 운영 중이므로, 패키지 업그레이드는 배포와
+> 분리된 **별도 점검 시간**에 mielin 담당자와 사전 조율 후 진행하세요
+> (자세한 내용은 아래 "운영 체크리스트 — 보안 패치" 참고).
+
 > `mysql-server`는 설치하지 않습니다 — 이 EC2에는 `mielin` DB용 MySQL이 이미
-> 설치되어 운영 중입니다. 아래는 (신규 EC2였다면 필요했을) 참고용 명령이며,
-> **실제로 실행할 필요는 없습니다.**
-> ```bash
-> # 참고용 — 실행하지 않음
-> # sudo apt install -y mysql-server
-> ```
+> 설치되어 운영 중입니다.
 
 **Python 3.12 확인**: Ubuntu 24.04는 기본 저장소에 `python3.12`가 있습니다. Ubuntu
 22.04라면 기본 저장소 버전이 더 낮을 수 있어 `deadsnakes` PPA가 필요할 수 있습니다.
@@ -165,60 +204,146 @@ uv --version
 
 ---
 
-## 2단계 — MySQL 상태 확인 (신규 설정 아님)
+## 2단계 — MySQL 상태 확인 및 DB 계정 준비 (최소 권한)
 
 이미 운영 중인 MySQL이므로 **설치, `mysql_secure_installation`, 재시작,
-`systemctl enable` 모두 다시 할 필요가 없습니다.** 아래는 상태만 확인하는
-단계입니다.
+`systemctl enable` 모두 다시 할 필요가 없습니다.**
 
 ```bash
 sudo systemctl status mysql          # active (running) 확인만
 grep bind-address /etc/mysql/mysql.conf.d/mysqld.cnf   # 127.0.0.1인지 확인만, 값 변경 없음
 ```
 
-**기존 계정 권한 확인** — 새 테이블(`ocr_review_*`)을 만들고 이후 앱이
-사용할 만큼의 권한이 있는지만 봅니다. 신규 계정을 만들 필요는 없습니다.
+### DB 계정과 권한 (원칙)
+
+- **앱이 실제로 접속에 쓰는 계정에는 `CREATE`/`ALTER`/`DROP`을 주지 않습니다.**
+  스키마 반영(3단계의 덤프 import)은 `root` 또는 별도 마이그레이션 계정으로
+  수행하고, 끝나면 그 권한은 앱 계정에 남기지 않습니다.
+- `MYSQL_USER`(SCT 원본 조회)는 **SELECT 전용**으로 유지합니다.
+- `REVIEW_MYSQL_USER`(OCR 검수)는 **이관 대상 5개 테이블 + 뷰에 대해서만**
+  SELECT/INSERT/UPDATE를 부여합니다. `mielin.*` 전체에 권한을 주지 않습니다.
+- 둘 다 **DELETE는 부여하지 않습니다** — 검수 기록은 append-only 원칙입니다.
+- `MYSQL_USER`와 `REVIEW_MYSQL_USER`는 **같은 계정으로 강제하지 않습니다.**
+  운영에서 같은 서버·같은 DB를 가리키더라도 계정은 분리 가능하게 둡니다
+  (권한 최소화 + 사고 시 영향 범위 축소).
+
+계정 생성/권한 부여(운영자가 `root`로 직접 실행):
 
 ```bash
 sudo mysql -u root -p
 ```
 ```sql
-SHOW GRANTS FOR '<mielin 접속에 이미 쓰이는 계정>'@'localhost';
-```
+-- 이미 SCT 조회에 쓰이던 계정이 있다면 GRANT만 재확인하고, 없다면 새로 만든다.
+CREATE USER IF NOT EXISTS 'sct_reader'@'localhost' IDENTIFIED BY '<strong-password>';
+GRANT SELECT ON mielin.* TO 'sct_reader'@'localhost';
 
-권한이 부족하면(예: `CREATE`가 없어서 4단계 테이블 생성이 안 되는 경우) 그때만
-최소한으로 추가합니다:
-
-```sql
-GRANT SELECT, INSERT, UPDATE, CREATE ON mielin.* TO '<계정>'@'localhost';
--- CREATE는 3단계 테이블 생성 1회만 필요하면, 이후 회수해도 됩니다.
--- DELETE는 주지 않습니다 — 검수 기록은 append-only 원칙 (README 참고)
+-- OCR 검수 전용 계정 — 5개 테이블 + 뷰에만 권한을 준다 (mielin.* 전체 아님).
+CREATE USER IF NOT EXISTS 'ocr_review_app'@'localhost' IDENTIFIED BY '<strong-password>';
+GRANT SELECT, INSERT, UPDATE ON mielin.ocr_admin_comments     TO 'ocr_review_app'@'localhost';
+GRANT SELECT, INSERT, UPDATE ON mielin.ocr_negative_keywords  TO 'ocr_review_app'@'localhost';
+GRANT SELECT, INSERT, UPDATE ON mielin.ocr_review_comments    TO 'ocr_review_app'@'localhost';
+GRANT SELECT, INSERT, UPDATE ON mielin.ocr_review_edits       TO 'ocr_review_app'@'localhost';
+GRANT SELECT, INSERT, UPDATE ON mielin.ocr_reviewers          TO 'ocr_review_app'@'localhost';
+GRANT SELECT ON mielin.v_sct_review_status TO 'ocr_review_app'@'localhost';
 FLUSH PRIVILEGES;
 ```
+
+권한 확인:
+
+```sql
+SHOW GRANTS FOR 'sct_reader'@'localhost';
+SHOW GRANTS FOR 'ocr_review_app'@'localhost';
+```
+
+> 3단계의 덤프 import 자체는 `CREATE TABLE`/`DROP TABLE`이 필요하므로 위
+> 앱 계정이 아니라 `root`(또는 별도 마이그레이션 계정)로 실행합니다. 위
+> `ocr_review_app` 계정에는 애초에 `CREATE`/`DROP` 권한을 주지 않았으므로,
+> 앱 자체는 스키마를 변경할 수 없습니다.
 
 ---
 
 ## 3단계 — 로컬 DB → EC2 `mielin` DB로 이관 (테이블 추가)
 
-이전 문서와 달리 **새 DB(`ocr_review`)를 만드는 게 아니라, 기존 `mielin`
-DB 안에 검수용 테이블을 추가**하는 작업입니다.
+이관 대상은 정확히 **아래 5개 테이블 + 1개 뷰**입니다:
 
-**로컬(Windows) PC에서** 스키마+데이터를 덤프합니다 (한글 깨짐 방지를 위해
-`utf8mb4` 옵션 필수):
+- `ocr_admin_comments`, `ocr_negative_keywords`, `ocr_review_comments`,
+  `ocr_review_edits`, `ocr_reviewers` (테이블)
+- `v_sct_review_status` (뷰)
+
+### 3-0. mielin 백업 (import 전 필수)
+
+되돌릴 수 있는 지점을 먼저 만들어둡니다 — 아래 4개 항목이 전부 끝나기 전에는
+백업 없이 import를 진행하지 않습니다.
+
+```bash
+# EC2에서 — import 직전에 mielin 전체를 백업
+mkdir -p ~/backups
+mysqldump --default-character-set=utf8mb4 -u root -p mielin \
+  | gzip > ~/backups/mielin_pre_ocr_import_$(date +%F_%H%M).sql.gz
+```
+
+### 3-1. 이관 대상 충돌 확인
+
+```bash
+mysql -u root -p mielin -e "
+  SHOW TABLES LIKE 'ocr_admin_comments';
+  SHOW TABLES LIKE 'ocr_negative_keywords';
+  SHOW TABLES LIKE 'ocr_review_comments';
+  SHOW TABLES LIKE 'ocr_review_edits';
+  SHOW TABLES LIKE 'ocr_reviewers';
+  SHOW FULL TABLES IN mielin LIKE 'v_sct_review_status';
+"
+```
+
+**결과가 하나라도 나오면(=이미 존재하면) 즉시 멈추세요.** 아래 덤프 파일에는
+이 5개 테이블 전부에 대해 **`DROP TABLE IF EXISTS`가 포함되어 있어**, 그대로
+import하면 기존 데이터가 **삭제된 뒤 새로 만들어집니다.** 기존 객체가
+있다면 바로 import하지 말고, 그 데이터가 무엇인지 먼저 확인해 병합 여부를
+판단하세요(3-0에서 이미 백업을 떠 뒀으므로 실수해도 복구는 가능합니다).
+
+### 3-2. cutover 직전 최종 덤프 (데이터 유실 구간 방지)
+
+**로컬에서 검수 작업이 계속 진행 중이라면, 예전에 미리 떠둔 덤프를 그대로
+쓰지 마세요.** import 직전에 아래 둘 중 하나를 반드시 지키세요.
+
+- (권장) cutover 시각을 정해 팀에 공지하고, 그 시각부터 로컬 앱에서 검수
+  입력을 중지시킨 뒤 덤프를 뜬다. 이후 로컬 앱은 재사용하지 않는다.
+- 위가 어렵다면, import 직전에 **최종 덤프를 다시 한 번 떠서** 그 사이
+  쌓인 데이터가 빠지지 않게 한다.
+
+로컬(Windows) PC에서 최종 덤프:
 
 ```bash
 "C:\Program Files\MySQL\MySQL Server 8.4\bin\mysqldump.exe" \
   --default-character-set=utf8mb4 -h 127.0.0.1 -u root -p \
-  ocr_review > ocr_review_dump.sql
+  ocr_review ocr_admin_comments ocr_negative_keywords ocr_review_comments \
+  ocr_review_edits ocr_reviewers v_sct_review_status > ocr_review_dump.sql
 ```
 
-> ⚠️ **덤프 파일 안의 `CREATE DATABASE`/`USE ocr_review` 구문 주의**
-> 이 옵션으로 뜬 덤프 파일 안에는 로컬 DB 이름(`ocr_review`)을 기준으로 한
-> `CREATE DATABASE`/`USE` 구문이 들어있지 않지만(위 예시엔 `--databases`를
-> 쓰지 않았으므로 없음), 만약 다른 방식으로 다시 뜨게 되면 이 구문이 포함될 수
-> 있습니다. 복원 전에 덤프 파일을 열어 `CREATE DATABASE`/`USE` 줄이 있는지
-> 확인하고, 있다면 지운 뒤 진행하세요 — 그대로 실행하면 `mielin`이 아니라
-> 별도의 `ocr_review` DB가 새로 생겨버립니다.
+> ⚠️ **덤프 파일 자체에는 `CREATE DATABASE`/`USE` 구문이 없습니다**(확인
+> 완료). 즉 아래 import 명령에서 지정한 DB(`mielin`)에 그대로 들어갑니다 —
+> 파일 자체가 어느 DB로 갈지 정하지 않으므로, import 명령의 대상 DB명을
+> 잘못 쓰면(예: `ocr_review`) 엉뚱한 DB에 생성됩니다.
+
+> ⚠️ **뷰의 `DEFINER=root@localhost SQL SECURITY DEFINER`**: 덤프에 포함된
+> `v_sct_review_status` 뷰는 로컬 개발 DB의 `root@localhost`로 정의돼
+> 있습니다. 운영 EC2에도 같은 이름/권한의 `root@localhost`가 있다면 그대로
+> 동작하지만, 다음 중 하나를 반드시 선택해 처리하세요.
+> - **(A) import 전 치환**: 로컬에서 덤프 파일을 열어(민감 데이터가 있으니
+>   에디터로만, 저장소에 올리지 말고) `DEFINER=`root`@`localhost`` 부분을
+>   운영에서 실제로 쓸 계정(예: 마이그레이션 계정)으로 바꾼 뒤 import한다.
+> - **(B) import 후 재생성**: 일단 그대로 import하고, 아래처럼 운영 계정으로
+>   뷰를 명시적으로 다시 만든다(뷰 정의 SELECT문은 로컬에서
+>   `SHOW CREATE VIEW v_sct_review_status;`로 뽑아서 그대로 옮긴다).
+>   ```sql
+>   DROP VIEW IF EXISTS mielin.v_sct_review_status;
+>   CREATE DEFINER=`<운영에서 쓸 계정>`@`localhost` SQL SECURITY DEFINER
+>   VIEW mielin.v_sct_review_status AS
+>   <SHOW CREATE VIEW 결과에서 그대로 복사한 SELECT문>;
+>   ```
+> 어느 쪽이든 뷰를 SELECT하는 `ocr_review_app` 계정이 DEFINER 계정의 권한으로
+> 실행되므로, DEFINER 계정이 실제로 운영 EC2에 존재하고 잠겨있지 않은지
+> 먼저 확인하세요.
 
 로컬 → EC2로 전송:
 
@@ -226,71 +351,117 @@ DB 안에 검수용 테이블을 추가**하는 작업입니다.
 scp -i <key.pem> ocr_review_dump.sql ubuntu@<EC2 퍼블릭 IP>:~/
 ```
 
-**EC2에서** `mielin` DB로 복원 (대상 DB명이 `ocr_review`가 아니라 `mielin`인
-것에 주의):
+**EC2에서** `root`(또는 마이그레이션 계정)로 `mielin` DB에 복원:
 
 ```bash
 mysql --default-character-set=utf8mb4 -u root -p mielin < ~/ocr_review_dump.sql
 ```
 
-검증 (대상 DB도 `mielin`으로):
+### 3-3. import 후 검증 (row count만으로 끝내지 않는다)
+
+**행 수 비교**:
 
 ```bash
-mysql -u <계정> -p mielin -e "
+mysql -u root -p mielin -e "
   SELECT 'ocr_reviewers' t, COUNT(*) c FROM ocr_reviewers
   UNION ALL SELECT 'ocr_review_comments', COUNT(*) FROM ocr_review_comments
-  UNION ALL SELECT 'ocr_admin_comments', COUNT(*) FROM ocr_admin_comments;
+  UNION ALL SELECT 'ocr_admin_comments', COUNT(*) FROM ocr_admin_comments
+  UNION ALL SELECT 'ocr_review_edits', COUNT(*) FROM ocr_review_edits
+  UNION ALL SELECT 'ocr_negative_keywords', COUNT(*) FROM ocr_negative_keywords;
 "
 ```
 
-**하루 약 520건씩 계속 쌓이는 데이터라 특정 숫자를 이 문서에 고정해두면 금방
-틀린 값이 됩니다** — 덤프 뜨기 직전에 **로컬에서 같은 쿼리를 먼저 돌려서** 그
-값과 위 EC2 결과가 같은지 비교하세요:
+3-2에서 뜬 최종 덤프 시점 기준으로, **로컬에서 같은 쿼리를 먼저 돌려서** 값이
+일치하는지 비교하세요(하루 수백 건씩 계속 쌓이는 데이터라 이 문서에 특정
+숫자를 고정해두지 않습니다).
 
-```powershell
-"C:\Program Files\MySQL\MySQL Server 8.4\bin\mysql.exe" -h 127.0.0.1 -u root -p ocr_review -e "
-  SELECT 'ocr_reviewers' t, COUNT(*) c FROM ocr_reviewers
-  UNION ALL SELECT 'ocr_review_comments', COUNT(*) FROM ocr_review_comments
-  UNION ALL SELECT 'ocr_admin_comments', COUNT(*) FROM ocr_admin_comments;
+**스키마/인덱스/FK/뷰 검증** (행 수가 같아도 구조가 다르면 의미가 없습니다):
+
+```bash
+# 테이블 구조 비교 — 로컬/EC2 양쪽에서 각각 뽑아 diff
+mysql -u root -p mielin -e "
+  SHOW CREATE TABLE ocr_reviewers\G
+  SHOW CREATE TABLE ocr_review_comments\G
+  SHOW CREATE TABLE ocr_admin_comments\G
+  SHOW CREATE TABLE ocr_review_edits\G
+  SHOW CREATE TABLE ocr_negative_keywords\G
+"
+
+# 인덱스
+mysql -u root -p mielin -e "
+  SHOW INDEX FROM ocr_reviewers;
+  SHOW INDEX FROM ocr_review_comments;
+"
+
+# FK (참조 관계가 깨지지 않았는지)
+mysql -u root -p mielin -e "
+  SELECT TABLE_NAME, COLUMN_NAME, CONSTRAINT_NAME, REFERENCED_TABLE_NAME, REFERENCED_COLUMN_NAME
+  FROM information_schema.KEY_COLUMN_USAGE
+  WHERE TABLE_SCHEMA='mielin' AND REFERENCED_TABLE_NAME IS NOT NULL
+    AND TABLE_NAME IN ('ocr_reviewers','ocr_review_comments','ocr_admin_comments','ocr_review_edits');
+"
+
+# 뷰 — 정의와 실제 조회 둘 다 확인
+mysql -u root -p mielin -e "SHOW CREATE VIEW v_sct_review_status\G"
+mysql -u root -p mielin -e "SELECT COUNT(*) FROM v_sct_review_status;"
+```
+
+### 3-4. 테스트/개발 계정 정리 (운영 반영 전 결정 필요)
+
+```bash
+mysql -u root -p mielin -e "
+  SELECT id, username, role, is_active, is_deleted, last_login_at
+  FROM ocr_reviewers ORDER BY username;
 "
 ```
 
-계정 비밀번호(bcrypt 해시)도 그대로 옮겨지므로 `technonia01`/`technonia02`/`admin`
-계정은 기존 비밀번호로 바로 로그인할 수 있습니다 — 새로 시딩할 필요 없습니다.
+- [ ] **`reviewer-a`, `reviewer-b`**: 개발/테스트용 계정으로 보입니다. 운영
+      반영 전에 **삭제할지 비활성화(`is_active=0`)할지 팀 확인 후 결정**하세요.
+      앱 계정에는 DELETE가 없으므로, 지우기로 했다면 `root`로 직접 실행합니다.
+      ```sql
+      -- 삭제 대신 비활성화(권장 — 이력 보존)
+      UPDATE ocr_reviewers SET is_active = 0 WHERE username IN ('reviewer-a', 'reviewer-b');
+      -- 완전 삭제가 필요하다면(연관 FK 데이터가 없을 때만)
+      -- DELETE FROM ocr_reviewers WHERE username IN ('reviewer-a', 'reviewer-b');
+      ```
+- [ ] **`admin`**: 운영에 남길 계정인지 확인(계정명이 일반적이라 실수로
+      낯선 사람이 접근하지 않게 비밀번호를 운영용으로 재발급하는 것을 권장).
+- [ ] **`technonia01`, `technonia02`**: 운영 실사용 계정으로 보입니다.
+      `is_active=1`, `is_deleted=0`인지 확인하고, **실제 브라우저에서
+      화이트리스트 IP로 접속해 기존 비밀번호로 로그인이 되는지(bcrypt 해시
+      검증) 반드시 테스트**하세요 — 비밀번호는 덤프에 그대로 딸려오므로
+      새로 시딩할 필요는 없습니다.
 
-> ⚠️ **덤프 전에 `ocr_reviewers`를 한 번 훑어보세요.** 이 프로젝트와 같은 로컬
-> MySQL을 공유하는 다른 프로젝트(예: 실험용 자동화 스크립트)가 실수로 이 DB에
-> 테스트 계정·데이터를 직접 써넣는 사고가 실제로 있었습니다. `role='annotator'
-> AND is_active=1`인데 `technonia01`/`technonia02`가 아닌 계정이 있다면, 그건
-> 검수자 화면에 즉시 노출되는 상태이므로 프로덕션으로 옮기기 전에 지우거나
-> 비활성화하세요.
+### 3-5. 덤프 파일 정리 (커밋 금지 + 사용 후 삭제)
 
-> ⚠️ **테이블명 충돌 확인**: 이제 검수용 테이블이 `mielin` DB 안, 즉 SCT 원본
-> 테이블들과 같은 네임스페이스에 생깁니다. 복원 전에 `SHOW TABLES FROM mielin;`
-> 으로 `ocr_reviewers`, `ocr_review_comments`, `ocr_admin_comments` 등과 겹치는
-> 이름이 이미 없는지 확인하세요.
-
-덤프 파일(`ocr_review_dump.sql`)은 검수 데이터 원본이 그대로 들어있으니 이관이
-끝나면 로컬/EC2 양쪽에서 삭제하거나 안전한 곳으로만 옮겨두세요.
+- 덤프 파일(`ocr_review_dump.sql`)은 **절대 git에 커밋하지 않습니다** —
+  `.gitignore`에 `*dump*.sql` 패턴을 추가해 실수로 스테이징되는 것을 막아
+  뒀습니다(그래도 `git status`로 한 번 더 확인하세요).
+- 검증(3-3)까지 끝나고 이관이 확정되면, **로컬/EC2 양쪽에서 삭제**합니다.
+  ```bash
+  # EC2
+  shred -u ~/ocr_review_dump.sql 2>/dev/null || rm -f ~/ocr_review_dump.sql
+  # 로컬(PowerShell)
+  Remove-Item ocr_review_dump.sql
+  ```
+- 롤백 가능성 때문에 잠시 보관해야 한다면, git 저장소 바깥의 별도
+  안전한 위치(예: 암호화된 개인 백업 폴더)에만 두세요.
 
 ---
 
 ## 4단계 — 소스 코드 전달
 
-로컬 프로젝트를 통째로 압축해 옮기되, **아래는 제외**하고 압축합니다 (이미
-`.gitignore`에 의도가 드러나 있는 항목들 + 배포 소스에 불필요한 것들):
+로컬 프로젝트를 통째로 압축해 옮기되, **아래는 제외**하고 압축합니다:
 
 | 제외 대상 | 이유 |
 |---|---|
 | `.venv/` | Windows용 가상환경, EC2에서 `uv sync`로 새로 만듦 |
-| `__pycache__/`, `*.pyc` | 캐시 |
+| `__pycache__/`, `*.pyc`, `.pytest_cache/` | 캐시 |
 | `app/.env` | 로컬 실제 자격증명 — 5단계에서 EC2용으로 새로 작성 |
 | `.mysql/credentials.txt` | 로컬 MySQL root 비밀번호, EC2와 무관 |
 | `.mysql/data/` | 로컬 MySQL 실제 데이터 파일(수백MB), 3단계 덤프로 이미 이관함 |
 | `uvicorn_out.log` | 로컬 실행 로그 |
-
-PowerShell/Git Bash에서 `tar`/`zip`으로 위 목록만 빼고 압축한 뒤 scp로
-전송하고, EC2에서 압축을 풉니다:
+| `*.sql` 중 `*dump*` 패턴 파일 | 3-5에서 이미 정리했어야 함 — 남아 있으면 압축에서도 제외 |
 
 ```bash
 scp -i <key.pem> mielin_SCT.tar.gz ubuntu@<EC2 퍼블릭 IP>:~/
@@ -302,41 +473,26 @@ ls  # SCT Questions.xlsx가 포함되어 있는지 꼭 확인 — question_maste
 
 ---
 
-## 5단계 — `app/.env` 새로 작성 (두 DB 설정을 하나로 정렬)
-
-로컬 `.env`에는 두 세트의 DB 설정이 분리되어 있었습니다:
-
-- `MYSQL_*` — `mielin` 원본 데이터 접속용 (로컬에서는 원격 `43.201.172.24`)
-- `REVIEW_MYSQL_*` — `ocr_review` 검수 데이터 접속용 (로컬에서는 로컬 MySQL `127.0.0.1`, DB명 `ocr_review`)
-
-EC2에서는 두 데이터가 물리적으로 **같은 MySQL, 같은 `mielin` DB**에 있으므로,
-이 두 세트를 아래처럼 맞춥니다:
+## 5단계 — `app/.env` 새로 작성
 
 ```bash
 cp app/.env.template app/.env
 nano app/.env   # 또는 vim
 ```
 
-| 항목 | 값 (EC2) |
+| 항목 | 값 (EC2, `APP_LEVEL=prod`) |
 |---|---|
+| `APP_LEVEL` | `prod` |
 | `MYSQL_HOST` | `127.0.0.1` |
 | `MYSQL_DATABASE` | `mielin` |
-| `MYSQL_USER` / `PASSWORD` | 기존에 이미 쓰이고 있는 mielin 접속 계정 정보 그대로 |
-| `REVIEW_MYSQL_HOST` | `127.0.0.1` |
-| `REVIEW_MYSQL_DATABASE` | `mielin` (기존 `ocr_review`가 아니라 **`mielin`으로 변경**) |
-| `REVIEW_MYSQL_USER` / `PASSWORD` | 위 `MYSQL_USER`와 동일한 계정 재사용 (신규 발급 불필요) |
+| `MYSQL_USER` / `PASSWORD` | 2단계에서 만든 SELECT 전용 계정(`sct_reader`) |
+| `REVIEW_MYSQL_HOST` / `PORT` | `APP_LEVEL=prod`이면 앱이 무시하고 `MYSQL_HOST/PORT`를 쓰므로 값을 비워도 되지만, 문서화를 위해 `MYSQL_HOST`/`MYSQL_PORT`와 같은 값을 적어두는 것을 권장 |
+| `REVIEW_MYSQL_DATABASE` | `mielin` |
+| `REVIEW_MYSQL_USER` / `PASSWORD` | 2단계에서 만든 검수 전용 계정(`ocr_review_app`) — `MYSQL_USER`와 **다른 계정** |
 | `AWS_ACCESS_KEY_ID` / `SECRET` | **로컬 키를 재사용하지 말고 새로 발급**한 키 사용 |
 | `S3_BUCKET` / `AWS_REGION` | `cmaps-hub` / `ap-northeast-2` (로컬과 동일) |
 | `SESSION_SECRET_KEY` | 새로 생성 — 아래 명령 참고 |
 | `SESSION_MAX_AGE_SECONDS` | 로컬과 동일하게 두거나 필요에 맞게 조정 |
-
-> ⚠️ **소스 코드 확인이 한 번 더 필요합니다**: 앱 코드가 `MYSQL_*`과
-> `REVIEW_MYSQL_*`를 완전히 독립된 두 개의 DB 커넥션(풀)으로 다루고 있다면,
-> 위 표처럼 값만 맞춰주는 것으로 충분히 동작합니다 — 같은 서버의 같은 DB에
-> 커넥션이 두 개 열리는 것뿐이라 문제는 없습니다. 다만 두 커넥션이 이제
-> 완전히 동일한 대상을 가리키게 되므로, 이 기회에 커넥션을 하나로 합치는
-> 리팩터링을 할지는 실제 커넥션 생성 코드(`app/db.py` 등)를 보고 판단하세요.
-> 이 문서만으로는 코드 구조까지 단정할 수 없어 값 정렬까지만 반영했습니다.
 
 ```bash
 python3 -c "import secrets; print(secrets.token_hex(32))"
@@ -357,11 +513,15 @@ chmod 600 app/.env
 
 ---
 
-## 6단계 — 파이썬 의존성 설치
+## 6단계 — 파이썬 의존성 설치 (lockfile 고정)
+
+`uv.lock`에 고정된 버전 그대로, lockfile을 갱신하지 않고 설치합니다
+(`pyproject.toml`과 `uv.lock`이 어긋나 있으면 여기서 바로 실패해야
+합니다 — 조용히 다른 버전이 깔리는 것을 막기 위함):
 
 ```bash
 cd ~/mielin_SCT
-uv sync
+uv sync --frozen
 ```
 
 `pyproject.toml`에 `requires-python = ">=3.12,<3.13"`으로 고정돼 있으므로, 1단계에서
@@ -369,7 +529,27 @@ Python 3.12가 제대로 설치됐어야 이 단계가 성공합니다.
 
 ---
 
-## 7단계 — systemd 서비스로 등록
+## 7단계 — 배포 전 필수 게이트: 테스트 실행
+
+**아래 명령이 실패하면 8단계(systemd 재시작)로 넘어가지 않습니다.** 테스트는
+실제 MySQL/AWS에 접속하지 않으므로 이 EC2에서 그대로 돌려도 안전합니다.
+
+```bash
+uv run pytest -q
+```
+
+- 실패 시: 실패한 테스트를 먼저 확인하고 원인을 해결한 뒤 다시 실행합니다.
+  절대 `systemctl restart sct-review`로 넘어가지 마세요 — 이미 떠 있는
+  이전 버전이 계속 서비스되게 두는 편이, 검증 안 된 새 코드를 올리는 것보다
+  안전합니다.
+- (선택) lockfile이 실제로 최신인지 한 번 더 확인하려면:
+  ```bash
+  uv lock --check
+  ```
+
+---
+
+## 8단계 — systemd 서비스로 등록
 
 로컬 개발에서 쓰던 `watchfiles`(코드 저장 시 자동 재시작)는 개발 편의용이라
 운영에는 필요 없습니다. 운영은 순수 `uvicorn`을 systemd로 관리해 죽으면 자동
@@ -388,6 +568,7 @@ After=network.target mysql.service
 Type=simple
 User=ubuntu
 WorkingDirectory=/home/ubuntu/mielin_SCT
+Environment=APP_LEVEL=prod
 ExecStart=/home/ubuntu/.local/bin/uv run uvicorn app.main:app --host 0.0.0.0 --port 8011
 Restart=always
 RestartSec=3
@@ -396,6 +577,9 @@ RestartSec=3
 WantedBy=multi-user.target
 ```
 
+- `Environment=APP_LEVEL=prod`를 반드시 넣으세요 — 이게 없고 `.env`에도
+  `APP_LEVEL`이 비어 있으면 서비스가 기동하지 못하고 즉시 죽습니다(의도된
+  동작입니다 — 3번 "APP_LEVEL 환경 분리" 참고).
 - `ExecStart`의 `uv` 경로는 `which uv`로 실제 경로를 확인해 맞추세요.
 - `User`는 소스가 있는 계정과 맞춰야 합니다(예시는 `ubuntu`).
 - `mysql.service`는 이미 이 인스턴스에서 다른 용도로도 쓰이고 있으므로,
@@ -406,25 +590,25 @@ sudo systemctl daemon-reload
 sudo systemctl enable sct-review
 sudo systemctl start sct-review
 sudo systemctl status sct-review   # active (running) 확인
+sudo journalctl -u sct-review -n 20 --no-pager
+# 첫 줄에 [startup] APP_LEVEL=prod MYSQL=127.0.0.1:3306/mielin ... 이 보이는지 확인
+# (dev 값이 보이면 잘못된 .env가 배포된 것 — 즉시 중단하고 5단계부터 재확인)
 ```
 
 ---
 
-## 8단계 — 보안그룹/방화벽 재확인 (IP 화이트리스트 기준)
+## 9단계 — 보안그룹/방화벽 재확인 (IP 화이트리스트 기준)
 
 - **8011 인바운드**: **허용된 IP 화이트리스트만** (개별 IP 또는 소규모 목록으로
   등록, `0.0.0.0/0` 금지)
 - **22(SSH) 인바운드**: 관리자 IP만 허용
 - **3306(MySQL)**: 인바운드 규칙 자체를 만들지 않습니다 — `bind-address 127.0.0.1`로
-  이미 외부 접속이 막혀 있으므로 이중으로 안전합니다. (기존 `mielin` 운영
-  설정을 그대로 유지 — 새로 손댈 필요 없음)
-- **아웃바운드**: S3(HTTPS/443)로 나가는 트래픽만 확인하면 됩니다 — `mielin`
-  DB가 이제 로컬 접속이므로, 이전 문서에 있던 "mielin 쪽 방화벽이 EC2
-  아웃바운드를 허용하는지" 확인은 **더 이상 필요 없습니다.**
+  이미 외부 접속이 막혀 있으므로 이중으로 안전합니다.
+- **아웃바운드**: S3(HTTPS/443)로 나가는 트래픽만 확인하면 됩니다.
 
 ---
 
-## 9단계 — 동작 확인
+## 10단계 — 동작 확인
 
 EC2 내부에서:
 
@@ -441,7 +625,7 @@ sudo journalctl -u sct-review -n 50 --no-pager   # 에러 없는지 확인
 
 ---
 
-## 10단계 — 운영 체크리스트
+## 11단계 — 운영 체크리스트
 
 - **정기 백업**: `mielin` DB에 이미 백업 정책(예: RDS 스냅샷, 별도 cron 등)이
   있는지 먼저 확인하세요. 검수 테이블이 이제 `mielin` DB 안에 있으므로, 기존
@@ -452,23 +636,67 @@ sudo journalctl -u sct-review -n 50 --no-pager   # 에러 없는지 확인
   0 3 * * * mysqldump --default-character-set=utf8mb4 -u root -p'비밀번호' mielin | gzip > /home/ubuntu/backups/mielin_$(date +\%F).sql.gz
   ```
 - **로그 확인**: `sudo journalctl -u sct-review -f`
-- **재부팅 후 자동 기동 확인**: `systemctl is-enabled sct-review` (`mysql`은
-  기존 운영 설정을 그대로 따르므로 별도로 건드리지 않습니다)
-- **보안 패치**: `sudo apt update && sudo apt upgrade` 주기적으로 적용 —
-  단, `mielin`을 함께 운영 중인 인스턴스이므로 패치 전 담당자와 조율
-- **디스크 용량**: `/var/lib/mysql` 용량 모니터링 — 이제 검수 데이터 증가분도
-  같은 볼륨에 쌓입니다
+- **재부팅 후 자동 기동 확인**: `systemctl is-enabled sct-review`
+- **보안 패치(`apt upgrade`)**: 배포 절차에 포함하지 않습니다. `mielin`을
+  함께 운영 중인 인스턴스이므로, **별도로 잡은 점검 시간에만** mielin
+  담당자와 조율 후 `sudo apt update && sudo apt upgrade -y`를 실행하세요.
+- **디스크 용량**: `/var/lib/mysql` 용량 모니터링 — 검수 데이터 증가분도
+  같은 볼륨에 쌓입니다.
+- **배포 전 게이트 재확인**: 다음 배포부터도 7단계(`uv run pytest -q`)가
+  통과하지 않으면 `systemctl restart sct-review`를 하지 않습니다.
 
 ---
 
-## 나중에 도메인/HTTPS를 붙이게 되면
+## HTTP 8011의 보안 한계 — VPN/HTTPS 권고
 
-지금은 화이트리스트 기반 HTTP 전용이라 그대로 두면 되지만, 나중에 외부 도메인
-+ HTTPS로 바꾸게 되면 아래 두 가지를 같이 챙기세요.
+지금 구성(화이트리스트 + 평문 HTTP)에는 실질적인 한계가 있습니다.
 
-1. nginx를 리버스 프록시로 앞에 두고 Let's Encrypt(`certbot`)로 TLS 인증서 발급.
-2. `app/main.py`의 `SessionMiddleware`에 `https_only=True`를 추가해 세션 쿠키가
-   HTTPS로만 전송되게 해야 합니다(지금은 HTTP 전용 환경이라 꺼져 있는 게 맞습니다).
+- IP가 화이트리스트에 있어도, **그 사용자와 EC2 사이의 네트워크 경로가
+  안전하다는 뜻은 아닙니다** — 사내망이 아닌 공용 와이파이·중간 프록시 등에서
+  평문 HTTP 트래픽(로그인 비밀번호, 세션 쿠키)이 노출될 수 있습니다.
+- 세션 쿠키가 `https_only` 없이 발급되므로, HTTPS로 전환하기 전까지는
+  이 위험이 구조적으로 남아 있습니다.
+
+권장 순서(우선순위):
+
+1. **VPN/사내망 경유로 전환** — 8011 포트를 인터넷에 직접 노출하지 않고
+   VPN 뒤로 옮기는 것이 화이트리스트보다 근본적인 해결책입니다.
+2. **nginx 리버스 프록시 + Let's Encrypt(`certbot`)로 HTTPS 적용** — 도메인이
+   있다면 이 방법으로 전환하고, `app/main.py`의 `SessionMiddleware`에
+   `https_only=True`를 추가하세요(지금은 HTTP 전용이라 꺼져 있는 게 맞습니다).
+3. 위 두 가지가 당장 어렵다면, 최소한 화이트리스트를 **고정 IP(사무실
+   고정 회선 등)로만** 제한하고, 이 상태를 임시 조치로 취급해 오래
+   유지하지 마세요.
+
+---
+
+## 롤백 절차
+
+문제가 생기면 아래 순서로 되돌립니다. 3-0에서 뜬 백업(`mielin_pre_ocr_import_*.sql.gz`)이
+이 절차의 전제입니다 — 백업 없이 진행했다면 먼저 가능한 현재 상태를 백업한 뒤
+진행하세요.
+
+1. **서비스 중지**: `sudo systemctl stop sct-review` (사용자가 깨진 화면을
+   보지 않도록 먼저 내립니다)
+2. **DB 원복**:
+   - 이관 대상 5개 테이블/뷰가 **원래 없었다면**(3-1에서 충돌 없음을 확인한
+     경우): 새로 생긴 객체만 제거합니다.
+     ```sql
+     DROP VIEW IF EXISTS mielin.v_sct_review_status;
+     DROP TABLE IF EXISTS mielin.ocr_admin_comments, mielin.ocr_negative_keywords,
+       mielin.ocr_review_comments, mielin.ocr_review_edits, mielin.ocr_reviewers;
+     ```
+   - 기존 객체와 **병합/충돌이 있었다면**: 전체 백업으로 복원합니다.
+     ```bash
+     gunzip -c ~/backups/mielin_pre_ocr_import_<날짜>.sql.gz | mysql -u root -p mielin
+     ```
+3. **애플리케이션 원복**: 이전 배포 소스/`.env`가 남아 있다면 그것으로
+   되돌리고 `uv sync --frozen` 후 7단계(pytest) → 8단계(systemd) 순서를
+   그대로 다시 밟습니다. 새 코드에 문제가 있었다면 원인 파악 전까지
+   재배포하지 않습니다.
+4. **검증**: 10단계의 동작 확인을 다시 수행해 정상 응답을 확인합니다.
+5. **사후 기록**: 무엇이 실패했는지, 어느 단계에서 발견했는지 남겨 다음
+   배포 때 같은 문제가 반복되지 않게 합니다.
 
 ---
 
@@ -476,8 +704,10 @@ sudo journalctl -u sct-review -n 50 --no-pager   # 에러 없는지 확인
 
 | 증상 | 확인할 것 |
 |---|---|
+| 서비스가 즉시 죽음(active (running)이 안 됨) | `sudo journalctl -u sct-review -n 50` — `APP_LEVEL` 또는 `SESSION_SECRET_KEY` 관련 에러 메시지가 원인일 가능성이 높음(8단계 참고) |
 | 브라우저에서 접속 자체가 안 됨 | 보안그룹 8011 인바운드에 접속 IP가 화이트리스트로 등록돼 있는지, `systemctl status sct-review` |
-| 로그인 화면은 뜨는데 로그인 실패 | `.env`의 `REVIEW_MYSQL_*` 값, `mysql -u <계정> -p mielin`로 직접 접속 테스트 |
+| 로그인 화면은 뜨는데 로그인 실패 | `.env`의 `REVIEW_MYSQL_*`(및 prod에서 실제로 쓰이는 `MYSQL_HOST/PORT`) 값, `mysql -u ocr_review_app -p mielin`로 직접 접속 테스트 |
 | 목록 조회 시 500/빈 화면 | `.env`의 `MYSQL_*` 값, `mielin` DB 테이블이 3단계에서 정상 이관됐는지 |
 | 이미지가 안 보임 | `.env`의 `AWS_*`/`S3_BUCKET` 값, IAM 키 권한(cmaps-hub 버킷 GetObject) |
-| 롤백이 필요할 때 | 3단계에서 만든 덤프로 `mielin` DB의 검수 테이블만 다시 복원 (SCT 원본 테이블은 건드리지 않도록 주의) |
+| 시작 로그의 APP_LEVEL/host가 기대와 다름 | 잘못된 `.env`가 배포됐거나 systemd `Environment=`가 빠진 것 — 즉시 서비스를 내리고 5·8단계 재확인 |
+| 롤백이 필요할 때 | 위 "롤백 절차" 참고 |

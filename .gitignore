@@ -1,7 +1,15 @@
 .venv/
 __pycache__/
+.pytest_cache/
 *.pyc
 .env
 .mysql/credentials.txt
 .mysql/data/
 uvicorn_out.log
+
+# DB 이관용 덤프 파일 — OCR 검수 데이터, 비밀번호 해시 등 민감정보가 들어있을
+# 수 있으므로 저장소에 절대 커밋하지 않는다 (스키마 마이그레이션 스크립트인
+# NN_*.sql은 이 패턴에 걸리지 않는다).
+*dump*.sql
+*.dump
+*.sql.gz

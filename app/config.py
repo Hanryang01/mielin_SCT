@@ -8,7 +8,35 @@ from dotenv import load_dotenv
 
 APP_DIR = Path(__file__).resolve().parent
 
+VALID_APP_LEVELS = ("dev", "prod")
+
+# app/.env는 dev/prod 공통 파일이다 — 파일을 나누지 않고, 그 안에 적힌
+# APP_LEVEL 값(dev 또는 prod)으로 동작을 가른다. systemd 운영 서비스가
+# Environment=APP_LEVEL=prod를 이미 프로세스 환경변수로 넘겨준 경우
+# load_dotenv는 그 값을 덮어쓰지 않는다(기본 override=False) — 파일 안에
+# 실수로 다른 값이 남아 있어도 systemd 쪽이 항상 우선한다.
 load_dotenv(APP_DIR / ".env")
+
+
+def _resolve_app_level() -> str:
+    """실행 환경(dev/prod)을 결정한다.
+
+    APP_LEVEL은 여기서 처음 만들어지는 게 아니라 프로세스 환경변수 또는
+    app/.env 안의 APP_LEVEL=dev|prod 줄에서 온다. 기본값을 두지 않는 이유는,
+    누락됐을 때 조용히 운영(prod)으로 기동되는 사고를 막기 위해서다.
+    """
+    app_level = os.environ.get("APP_LEVEL", "").strip()
+    if app_level not in VALID_APP_LEVELS:
+        raise RuntimeError(
+            f"APP_LEVEL이 올바르지 않습니다 (현재: {app_level!r}). "
+            f"{VALID_APP_LEVELS} 중 하나여야 합니다. app/.env에 "
+            "APP_LEVEL=dev 또는 APP_LEVEL=prod를 지정하거나(로컬 개발), "
+            "systemd 서비스에 Environment=APP_LEVEL=prod를 지정하세요(운영)."
+        )
+    return app_level
+
+
+APP_LEVEL = _resolve_app_level()
 
 
 @dataclass(frozen=True)
@@ -69,6 +97,7 @@ class S3Settings:
 
 @dataclass(frozen=True)
 class Settings:
+    app_level: str
     mysql: MySQLSettings
     review_mysql: ReviewMySQLSettings
     auth: AuthSettings
@@ -91,18 +120,36 @@ def _int_env(name: str, default: int, minimum: int | None = None) -> int:
 
 
 def load_settings() -> Settings:
+    app_level = _resolve_app_level()
+
+    mysql_host = os.getenv("MYSQL_HOST", "").strip()
+    mysql_port = _int_env("MYSQL_PORT", default=3306, minimum=1)
+
+    if app_level == "prod":
+        # 운영에서는 REVIEW_MYSQL이 MYSQL_*과 같은 MySQL 서버(같은 mielin DB)를
+        # 가리킨다 — host/port를 운영자가 두 군데에 중복 입력하다 값이
+        # 어긋나는 사고를 막기 위해 MYSQL_HOST/PORT를 그대로 재사용한다.
+        # REVIEW_MYSQL_USER/PASSWORD/DATABASE는 계정·권한을 분리 유지하기
+        # 위해 계속 독립적으로 설정한다.
+        review_host = mysql_host
+        review_port = mysql_port
+    else:
+        review_host = os.getenv("REVIEW_MYSQL_HOST", "").strip()
+        review_port = _int_env("REVIEW_MYSQL_PORT", default=3306, minimum=1)
+
     return Settings(
+        app_level=app_level,
         mysql=MySQLSettings(
-            host=os.getenv("MYSQL_HOST", "").strip(),
-            port=_int_env("MYSQL_PORT", default=3306, minimum=1),
+            host=mysql_host,
+            port=mysql_port,
             user=os.getenv("MYSQL_USER", "").strip(),
             password=os.getenv("MYSQL_PASSWORD", ""),
             database=os.getenv("MYSQL_DATABASE", "").strip(),
             charset=os.getenv("MYSQL_CHARSET", "utf8mb4").strip() or "utf8mb4",
         ),
         review_mysql=ReviewMySQLSettings(
-            host=os.getenv("REVIEW_MYSQL_HOST", "").strip(),
-            port=_int_env("REVIEW_MYSQL_PORT", default=3306, minimum=1),
+            host=review_host,
+            port=review_port,
             user=os.getenv("REVIEW_MYSQL_USER", "").strip(),
             password=os.getenv("REVIEW_MYSQL_PASSWORD", ""),
             database=os.getenv("REVIEW_MYSQL_DATABASE", "").strip(),
