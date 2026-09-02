@@ -6,13 +6,19 @@
 
 - EC2 OS: **Ubuntu 22.04 또는 24.04**
 - 웹 접속: **내부망/VPN에서만 HTTP** (도메인·TLS 없음, 지금 로컬처럼 포트 하나로 직접 접속)
-- MySQL(`ocr_review` DB): **앱과 같은 EC2 인스턴스에 직접 설치** (RDS 아님)
-- `mielin`(SCT 원본 데이터, `43.201.172.24`)은 그대로 둔다 — 우리가 관리하는 DB가
-  아니므로 옮기지 않고, 앱이 계속 그 주소로 원격 접속한다.
+- **새 EC2가 아니라, `mielin` 원본 DB가 이미 떠 있는 기존 EC2(`43.201.172.24`)를
+  그대로 재사용한다** (2026-08-31 확정 — 이 서버를 우리가 직접 관리하게 됨).
+  MySQL도 새로 설치하지 않고 **이미 떠 있는 MySQL 서버에 `ocr_review` 데이터베이스만
+  추가**한다 (RDS 아님).
+- **`mielin`은 그대로 둔다** — 여전히 SELECT 전용으로만 접근하고, 스키마·데이터는
+  건드리지 않는다. 이 서버를 우리가 관리하게 됐다고 해서 mielin을 채우는 원본
+  파이프라인(다른 프로세스/스케줄)에 손대는 건 아니다.
 
-전체 그림: **EC2 인스턴스 1대** 안에 (1) 이 앱(FastAPI/uvicorn), (2) `ocr_review`용
-MySQL이 같이 떠 있고, 이 인스턴스가 아웃바운드로 `mielin`(43.201.172.24)과
-S3(`cmaps-hub`)에 접속합니다.
+전체 그림: **EC2 인스턴스 1대**(기존 mielin 서버) 안에 (1) 이 앱(FastAPI/uvicorn),
+(2) 원래 있던 `mielin` MySQL, (3) 새로 추가하는 `ocr_review` MySQL(같은 MySQL
+서버 안의 별도 데이터베이스)이 모두 같이 떠 있습니다. `mielin`이 이제 원격이
+아니라 **같은 인스턴스 안의 localhost 접속**으로 바뀌는 것이 이전 버전 가이드와
+가장 큰 차이입니다 — 그래서 아웃바운드로 나갈 곳은 S3(`cmaps-hub`)뿐입니다.
 
 ---
 
@@ -22,19 +28,30 @@ S3(`cmaps-hub`)에 접속합니다.
 - [ ] 보안그룹에 최소 아래 두 인바운드 규칙이 있는지 (없으면 8단계에서 설정)
   - 22(SSH) — 관리자 IP만
   - 8011(HTTP) — 내부망/VPN 대역만 (전체 공개 금지)
-- [ ] **`mielin`(43.201.172.24) 쪽 방화벽이 이 EC2의 아웃바운드 IP를 허용하는지** —
-      허용 목록 기반이라면 EC2의 (탄력)IP를 미리 `mielin` 관리자에게 전달해 등록 요청
+- [ ] **기존 MySQL의 root 비밀번호를 시스템 관리자에게 받아둔다** — 이 서버는
+      처음 켜는 빈 인스턴스가 아니라 이미 `mielin`이 돌고 있는 운영 서버이므로,
+      `mysql_secure_installation`을 다시 돌리거나 root 비밀번호를 임의로
+      재설정하면 안 된다(아래 2단계 참고).
+- [ ] **`mielin`을 채우는 원본 배치/파이프라인이 이 서버의 어떤 계정·스케줄로
+      도는지 확인**한다 — 우리가 하는 작업(DB 추가, MySQL 재시작 등)이 그
+      파이프라인을 방해하지 않아야 한다.
 - [ ] 로컬 PC에서 EC2로 파일을 옮길 수단(scp) 사용 가능한지
 
 ---
 
 ## 1단계 — EC2 접속 및 기본 패키지 설치
 
+⚠️ **이미 운영 중인 서버입니다.** `sudo apt upgrade -y`는 mielin 파이프라인이
+의존하는 패키지 버전을 건드릴 수 있으니, 시스템 관리자와 먼저 확인하고 진행하는
+편이 안전합니다. `mysql-server`는 **이미 설치돼 있으므로 다시 설치하지 않습니다**
+— 아래 목록에서 뺐습니다.
+
 ```bash
 ssh -i <key.pem> ubuntu@<EC2 퍼블릭 IP>
 
-sudo apt update && sudo apt upgrade -y
-sudo apt install -y build-essential pkg-config default-libmysqlclient-dev mysql-server git
+sudo apt update
+sudo apt install -y build-essential pkg-config git
+mysql --version   # 이미 설치돼 있는지 확인만 — 8.0 계열이면 그대로 쓴다
 ```
 
 **Python 3.12 확인**: Ubuntu 24.04는 기본 저장소에 `python3.12`가 있습니다. Ubuntu
@@ -57,28 +74,27 @@ uv --version
 
 ---
 
-## 2단계 — MySQL 설정 (`ocr_review` DB)
+## 2단계 — MySQL 설정 (`ocr_review` DB 추가)
 
 Ubuntu 기본 저장소의 MySQL은 8.0 계열입니다(로컬 8.4.9와 마이너 버전이 다름). 이
 프로젝트의 스키마(`01~13*.sql`)는 8.0에서도 지원하는 문법만 쓰므로 버전 차이는
 문제 되지 않습니다.
 
-```bash
-sudo mysql_secure_installation
-# root 비밀번호 설정, 익명 계정 삭제 등 안내에 따라 진행
-```
+⚠️ **`mysql_secure_installation`은 실행하지 않습니다.** 이미 `mielin`이 돌고 있는
+운영 서버라, 이 명령이 건드리는 root 비밀번호·익명 계정·원격 root 로그인 허용
+여부 등이 이미 mielin 쪽 운영 방식에 맞춰 설정돼 있을 수 있습니다. 대신 0단계에서
+받아둔 **기존 root 비밀번호로 그대로 로그인**해서 우리 몫만 추가합니다.
 
-`bind-address`가 `127.0.0.1`인지 확인합니다(Ubuntu 기본값이 이미 이렇습니다 —
-외부에서 3306 포트로 직접 접속되지 않게 하는 것이 핵심입니다):
+`bind-address`가 어떻게 설정돼 있는지 **확인만** 합니다(바꾸지 않습니다 — 이미
+mielin 쪽 접속 방식에 맞춰져 있을 것이므로, 바꾸려면 반드시 관리자와 먼저
+상의하세요):
 
 ```bash
 grep bind-address /etc/mysql/mysql.conf.d/mysqld.cnf
-sudo systemctl restart mysql
-sudo systemctl enable mysql   # 재부팅 시 자동 기동
 ```
 
-DB와 앱 전용 계정을 만듭니다 (계정 이름/DB명은 로컬과 동일하게 맞춰 `app/.env`만
-바꾸면 되게 합니다):
+DB와 앱 전용 계정을 새로 추가합니다 — **`mielin` 데이터베이스나 기존 계정은
+전혀 건드리지 않습니다**, 아래 SQL은 전부 새로 추가하는 것뿐입니다:
 
 ```sql
 sudo mysql -u root -p
@@ -88,6 +104,7 @@ CREATE DATABASE ocr_review CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 CREATE USER 'sct_app'@'localhost' IDENTIFIED BY '새로운_비밀번호_여기에';
 GRANT SELECT, INSERT, UPDATE ON ocr_review.* TO 'sct_app'@'localhost';
 -- DELETE는 주지 않는다 — 검수 기록은 append-only 원칙 (README 참고)
+-- mielin.*에는 아무 권한도 주지 않는다 — sct_app은 ocr_review만 본다
 FLUSH PRIVILEGES;
 ```
 
@@ -96,6 +113,13 @@ FLUSH PRIVILEGES;
 > **이 EC2용 `sct_app` 비밀번호는 이 프로젝트 전용으로만 쓰세요** — 로컬에서
 > 같은 계정 정보를 다른 프로젝트(자동화 스크립트 등)에 그대로 재사용했다가
 > 그쪽이 실수로 이 DB에 직접 데이터를 써넣은 사고가 있었습니다.
+
+**앱이 mielin을 읽는 계정도 다시 확인하세요.** 지금까지는 원격(로컬 PC → EC2)으로
+`admin` 계정을 썼는데, 이제 앱이 같은 서버(localhost)에서 접속합니다. MySQL
+계정은 접속 호스트별로 별도 등록이라(`'admin'@'%'`와 `'admin'@'localhost'`는
+다른 계정), 기존 계정이 `localhost`에서의 접속을 허용하는지 확인이 필요합니다.
+안 되면 관리자에게 **`localhost`용 SELECT 전용 계정**을 새로 하나 요청하세요 —
+mielin 쪽 계정 관리는 여전히 관리자 소관입니다.
 
 ---
 
@@ -199,8 +223,9 @@ nano app/.env   # 또는 vim
 
 | 항목 | 값 |
 |---|---|
-| `MYSQL_HOST` 등 (`mielin` 접속) | 로컬과 **동일하게** `43.201.172.24` 등 그대로 |
-| `REVIEW_MYSQL_HOST` | `127.0.0.1` (같은 인스턴스의 MySQL) |
+| `MYSQL_HOST` (`mielin` 접속) | **`127.0.0.1`로 변경** — 로컬 PC에서는 원격(`43.201.172.24`)이었지만, 이제 앱과 mielin이 같은 인스턴스에 있으므로 localhost 접속입니다 |
+| `MYSQL_USER` / `PASSWORD` | 위 2단계에서 확인한, `localhost`에서 접속 가능한 mielin 읽기 전용 계정 |
+| `REVIEW_MYSQL_HOST` | `127.0.0.1` (같은 인스턴스의 MySQL, `ocr_review` DB) |
 | `REVIEW_MYSQL_USER` / `PASSWORD` | `sct_app` / 2단계에서 만든 **새 비밀번호** |
 | `REVIEW_MYSQL_DATABASE` | `ocr_review` |
 | `AWS_ACCESS_KEY_ID` / `SECRET` | **로컬 키를 재사용하지 말고 새로 발급**한 키 사용 |
@@ -282,10 +307,13 @@ sudo systemctl status sct-review   # active (running) 확인
 
 - **8011 인바운드**: 내부망/VPN CIDR만 허용 (0.0.0.0/0 금지)
 - **22(SSH) 인바운드**: 관리자 IP만 허용
-- **3306(MySQL)**: 인바운드 규칙 자체를 만들지 않습니다 — `bind-address 127.0.0.1`로
-  이미 외부 접속이 막혀 있으므로 이중으로 안전합니다.
-- **아웃바운드**: `mielin`(43.201.172.24:3306)과 S3(HTTPS/443)로 나가는 트래픽이
-  막혀 있지 않은지 확인
+- **3306(MySQL)**: 인바운드 규칙 자체를 만들지 않습니다 — mielin·ocr_review 둘 다
+  같은 인스턴스 안에서 localhost로만 접속하므로, 3306을 외부에 열 이유가
+  없습니다(기존에 3306 인바운드가 열려 있었다면, 왜 열려 있었는지 관리자와
+  확인 후 필요 없으면 닫는 것도 검토하세요).
+- **아웃바운드**: 이제 mielin은 같은 서버(localhost)라 별도 아웃바운드가
+  필요 없습니다 — S3(HTTPS/443)로 나가는 트래픽만 막혀 있지 않은지 확인하면
+  됩니다.
 
 ---
 
@@ -308,7 +336,12 @@ sudo journalctl -u sct-review -n 50 --no-pager   # 에러 없는지 확인
 
 ## 10단계 — 운영 체크리스트 (RDS가 아니므로 직접 챙겨야 하는 것들)
 
+⚠️ **이 서버엔 이미 mielin용 백업/운영 정책이 있을 수 있습니다.** 아래 항목을
+새로 만들기 전에 관리자에게 기존 백업 방식(있다면)을 먼저 물어보세요 — 중복
+cron이 겹치거나, 기존 백업 대상에 `ocr_review`만 빠지는 일이 없게 하기 위함입니다.
+
 - **정기 백업**: `cron`으로 매일 `mysqldump` 실행 후 별도 저장소(S3 등)에 보관
+  (`ocr_review`만 대상 — `mielin`은 관리자의 기존 백업 정책을 따릅니다)
   ```bash
   crontab -e
   # 예: 매일 새벽 3시
@@ -318,7 +351,9 @@ sudo journalctl -u sct-review -n 50 --no-pager   # 에러 없는지 확인
 - **재부팅 후 자동 기동 확인**: `systemctl is-enabled mysql sct-review` 둘 다
   `enabled`인지
 - **보안 패치**: `sudo apt update && sudo apt upgrade` 주기적으로 적용
-- **디스크 용량**: MySQL 데이터가 쌓이는 `/var/lib/mysql` 용량 모니터링
+- **디스크 용량**: `/var/lib/mysql`에 이제 `mielin`과 `ocr_review`가 같이
+  쌓입니다 — 우리 앱 때문에 mielin 쪽 여유 공간이 부족해지지 않도록 모니터링
+  주기를 관리자와 맞춰두세요
 
 ---
 
@@ -339,6 +374,6 @@ sudo journalctl -u sct-review -n 50 --no-pager   # 에러 없는지 확인
 |---|---|
 | 브라우저에서 접속 자체가 안 됨 | 보안그룹 8011 인바운드, `systemctl status sct-review` |
 | 로그인 화면은 뜨는데 로그인 실패 | `.env`의 `REVIEW_MYSQL_*` 값, `mysql -u sct_app -p ocr_review`로 직접 접속 테스트 |
-| 목록 조회 시 500/빈 화면 | `.env`의 `MYSQL_*`(mielin) 값, EC2 → 43.201.172.24 아웃바운드 방화벽 |
+| 목록 조회 시 500/빈 화면 | `.env`의 `MYSQL_HOST`가 `127.0.0.1`인지, mielin 계정이 특정 IP로만 접속을 제한해둔 계정(`'user'@'옛_원격_IP'`처럼)은 아닌지 — `localhost`/`127.0.0.1`을 허용하는 계정이어야 함 |
 | 이미지가 안 보임 | `.env`의 `AWS_*`/`S3_BUCKET` 값, IAM 키 권한(cmaps-hub 버킷 GetObject) |
 | 롤백이 필요할 때 | 3단계에서 만든 덤프로 `ocr_review` DB를 다시 복원 |
