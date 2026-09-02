@@ -23,26 +23,32 @@ def test_load_settings_dev_uses_review_mysql_values_as_is(monkeypatch):
     assert settings.review_mysql.port == 3307
 
 
-def test_load_settings_prod_reuses_mysql_host_and_port(monkeypatch):
+def test_load_settings_prod_reuses_mysql_connection_entirely(monkeypatch):
     monkeypatch.setenv("APP_LEVEL", "prod")
     monkeypatch.setenv("MYSQL_HOST", "prod-mysql-host")
     monkeypatch.setenv("MYSQL_PORT", "3306")
-    # prod에서는 REVIEW_MYSQL_HOST/PORT에 다른 값을 넣어도 무시되고
-    # MYSQL_HOST/PORT로 강제 통일된다 (운영은 같은 MySQL의 같은 mielin DB).
+    monkeypatch.setenv("MYSQL_USER", "sct_prod_user")
+    monkeypatch.setenv("MYSQL_PASSWORD", "sct-prod-password")
+    monkeypatch.setenv("MYSQL_DATABASE", "mielin")
+    # prod에서는 REVIEW_MYSQL_*에 다른 값을 넣어도 전부 무시되고 MYSQL_*로
+    # 강제 통일된다 (운영은 같은 MySQL 서버·같은 mielin DB·같은 계정).
     monkeypatch.setenv("REVIEW_MYSQL_HOST", "should-be-ignored")
     monkeypatch.setenv("REVIEW_MYSQL_PORT", "9999")
-    monkeypatch.setenv("REVIEW_MYSQL_USER", "review_prod_user")
-    monkeypatch.setenv("MYSQL_USER", "sct_prod_user")
+    monkeypatch.setenv("REVIEW_MYSQL_USER", "should-be-ignored-too")
+    monkeypatch.setenv("REVIEW_MYSQL_PASSWORD", "should-be-ignored-too")
+    monkeypatch.setenv("REVIEW_MYSQL_DATABASE", "should-be-ignored-too")
 
     settings = config.load_settings()
 
     assert settings.app_level == "prod"
     assert settings.review_mysql.host == "prod-mysql-host"
     assert settings.review_mysql.port == 3306
-    # host/port만 통일될 뿐, 계정(권한)은 여전히 독립적으로 유지된다.
-    assert settings.review_mysql.user == "review_prod_user"
-    assert settings.mysql.user == "sct_prod_user"
-    assert settings.review_mysql.user != settings.mysql.user
+    assert settings.review_mysql.user == "sct_prod_user"
+    assert settings.review_mysql.password == "sct-prod-password"
+    assert settings.review_mysql.database == "mielin"
+    # 값은 완전히 같아지지만, 두 Settings는 여전히 별개 객체(타입도 다름)다.
+    assert settings.review_mysql is not settings.mysql
+    assert isinstance(settings.review_mysql, config.ReviewMySQLSettings)
 
 
 def test_mysql_and_review_mysql_are_independent_settings_objects(monkeypatch):

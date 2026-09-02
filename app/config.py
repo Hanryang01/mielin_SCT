@@ -51,8 +51,11 @@ class MySQLSettings:
 
 @dataclass(frozen=True)
 class ReviewMySQLSettings:
-    """OCR 검수 DB 접속 정보. mielin(MYSQL_*, 읽기 전용)과 분리된 별도 DB로,
-    검수자 의견을 쓰기(INSERT/UPDATE)까지 하므로 계정 권한도 별도로 관리한다.
+    """OCR 검수 DB 접속 정보.
+
+    dev에서는 mielin(MYSQL_*, 읽기 전용)과 분리된 별도 DB/계정이다. prod에서는
+    load_settings()가 MYSQL_*과 같은 값(같은 서버·같은 mielin DB·같은 계정)을
+    그대로 채워 넣는다 — 운영은 실제로 같은 곳을 가리키기 때문이다.
     (03_ocr_review_schema.sql, OCR 검수 시나리오.md 참고)
     """
 
@@ -122,39 +125,46 @@ def _int_env(name: str, default: int, minimum: int | None = None) -> int:
 def load_settings() -> Settings:
     app_level = _resolve_app_level()
 
-    mysql_host = os.getenv("MYSQL_HOST", "").strip()
-    mysql_port = _int_env("MYSQL_PORT", default=3306, minimum=1)
+    mysql = MySQLSettings(
+        host=os.getenv("MYSQL_HOST", "").strip(),
+        port=_int_env("MYSQL_PORT", default=3306, minimum=1),
+        user=os.getenv("MYSQL_USER", "").strip(),
+        password=os.getenv("MYSQL_PASSWORD", ""),
+        database=os.getenv("MYSQL_DATABASE", "").strip(),
+        charset=os.getenv("MYSQL_CHARSET", "utf8mb4").strip() or "utf8mb4",
+    )
 
     if app_level == "prod":
-        # 운영에서는 REVIEW_MYSQL이 MYSQL_*과 같은 MySQL 서버(같은 mielin DB)를
-        # 가리킨다 — host/port를 운영자가 두 군데에 중복 입력하다 값이
-        # 어긋나는 사고를 막기 위해 MYSQL_HOST/PORT를 그대로 재사용한다.
-        # REVIEW_MYSQL_USER/PASSWORD/DATABASE는 계정·권한을 분리 유지하기
-        # 위해 계속 독립적으로 설정한다.
-        review_host = mysql_host
-        review_port = mysql_port
+        # 운영은 MYSQL_*과 REVIEW_MYSQL_*이 같은 MySQL 서버, 같은 mielin DB,
+        # 같은 계정을 가리킨다 — REVIEW_MYSQL_*를 따로 읽지 않고 MYSQL_*
+        # 값을 그대로 재사용한다. APP_LEVEL을 나눈 이유가 바로 이 분기다:
+        # 운영자가 .env에 같은 값을 두 번 입력하다 어긋나는 사고를 막는다.
+        # (연결 객체(MysqlReader/ReviewDbClient)는 여전히 분리되어 있다 —
+        # 합쳐지는 건 접속 설정값뿐이다.)
+        review_mysql = ReviewMySQLSettings(
+            host=mysql.host,
+            port=mysql.port,
+            user=mysql.user,
+            password=mysql.password,
+            database=mysql.database,
+            charset=mysql.charset,
+        )
     else:
-        review_host = os.getenv("REVIEW_MYSQL_HOST", "").strip()
-        review_port = _int_env("REVIEW_MYSQL_PORT", default=3306, minimum=1)
-
-    return Settings(
-        app_level=app_level,
-        mysql=MySQLSettings(
-            host=mysql_host,
-            port=mysql_port,
-            user=os.getenv("MYSQL_USER", "").strip(),
-            password=os.getenv("MYSQL_PASSWORD", ""),
-            database=os.getenv("MYSQL_DATABASE", "").strip(),
-            charset=os.getenv("MYSQL_CHARSET", "utf8mb4").strip() or "utf8mb4",
-        ),
-        review_mysql=ReviewMySQLSettings(
-            host=review_host,
-            port=review_port,
+        # dev는 REVIEW_MYSQL이 운영과 무관한 별도 DB이므로 REVIEW_MYSQL_*를
+        # 그대로 읽는다.
+        review_mysql = ReviewMySQLSettings(
+            host=os.getenv("REVIEW_MYSQL_HOST", "").strip(),
+            port=_int_env("REVIEW_MYSQL_PORT", default=3306, minimum=1),
             user=os.getenv("REVIEW_MYSQL_USER", "").strip(),
             password=os.getenv("REVIEW_MYSQL_PASSWORD", ""),
             database=os.getenv("REVIEW_MYSQL_DATABASE", "").strip(),
             charset=os.getenv("REVIEW_MYSQL_CHARSET", "utf8mb4").strip() or "utf8mb4",
-        ),
+        )
+
+    return Settings(
+        app_level=app_level,
+        mysql=mysql,
+        review_mysql=review_mysql,
         auth=AuthSettings(
             session_secret=os.getenv("SESSION_SECRET_KEY", "").strip(),
             session_max_age_seconds=_int_env(

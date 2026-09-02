@@ -17,7 +17,7 @@
 | `mielin` DB 접근 | 원격 `43.201.172.24:3306` | 같은 인스턴스이므로 **`localhost`/`127.0.0.1`** |
 | `ocr_review` 데이터 위치 | 신규 EC2에 별도 DB(`ocr_review`)로 새로 생성 | **`mielin` DB 안에 테이블로 추가** (별도 DB 아님) |
 | MySQL 설치·설정 | 처음부터 설치·`mysql_secure_installation` 진행 | **이미 구성되어 운영 중 — 설치·재시작·재부팅 설정 불필요** |
-| DB 계정 | 앱 전용 신규 계정(`sct_app`) 생성 | 최소 권한 원칙에 따라 **MYSQL_USER(SELECT 전용)와 REVIEW_MYSQL_USER(검수 테이블 한정)를 분리 생성** — 아래 "DB 계정과 권한" 참고 |
+| DB 계정 | 앱 전용 신규 계정(`sct_app`) 생성 | **신규 계정을 만들지 않는다 — 기존 mielin 접속 계정(광범위 권한)을 `MYSQL_USER`/`REVIEW_MYSQL_USER`에 그대로 재사용** — 아래 "DB 계정과 권한" 참고 |
 | 웹 접속 통제 | 내부망/VPN 대역 허용 | **허용된 IP 화이트리스트** 기반 접근 |
 
 > 참고: `mielin` 원격 주소로 알려진 `43.201.172.24`가 사실 이번에 배포하는
@@ -45,12 +45,15 @@
   않습니다** — 검수 기록은 append-only 설계입니다(`app/queries/ocr_review.py`
   확인 완료).
 - 이번 배포 작업으로 **APP_LEVEL(dev/prod) 환경 분리**가 추가됐습니다.
-  `APP_LEVEL=prod`일 때는 앱이 시작 시점에 `REVIEW_MYSQL_HOST`/`REVIEW_MYSQL_PORT`
-  값을 무시하고 `MYSQL_HOST`/`MYSQL_PORT`를 그대로 재사용하도록
-  `app/config.py`에 코드로 강제되어 있습니다(운영자가 두 값을 손으로 맞추다
-  어긋나는 사고를 막기 위함). `REVIEW_MYSQL_USER`/`PASSWORD`/`DATABASE`는
-  계정·권한 분리를 위해 dev/prod 모두 항상 독립적으로 설정합니다. 자세한 내용은
-  아래 "APP_LEVEL 환경 분리" 절 참고.
+  `APP_LEVEL=prod`일 때는 앱이 시작 시점에 `REVIEW_MYSQL_*` 6개 값을 전부
+  무시하고 `MYSQL_*` 값을 그대로 재사용하도록 `app/config.py`에 코드로
+  강제되어 있습니다 — 운영은 실제로 같은 서버·같은 mielin DB·같은 계정을
+  쓰기 때문이고, `APP_LEVEL`을 나눈 목적 자체가 이 분기입니다(운영자가
+  `.env`에 같은 값을 두 번 입력하다 어긋나는 사고를 막기 위함). `MysqlReader`/
+  `ReviewDbClient`라는 두 연결 객체 자체는 여전히 분리되어 있습니다 —
+  합쳐지는 건 접속 설정값(host/port/계정/DB명)뿐입니다. dev에서는
+  `REVIEW_MYSQL_*`를 그대로 읽으므로 운영과 무관한 별도 DB/계정을 씁니다.
+  자세한 내용은 아래 "APP_LEVEL 환경 분리" 절 참고.
 - 이번 개정 결과 **API·SQL 쿼리·필터·정렬·페이지네이션·집계·인증 동작은
   전혀 변경되지 않았습니다** — 위 APP_LEVEL 도입은 접속 설정 로딩 단계에만
   영향을 주고, 라우트/쿼리 코드는 그대로입니다.
@@ -109,7 +112,8 @@ SCT 원본 데이터는 운영 mielin(또는 복제본). `app/.env`에 `APP_LEVE
        │
        └──▶ MySQL, 127.0.0.1 (로컬 접속 — 원격 접속 아님)
               └ mielin DB  ─ SCT 원본 데이터 + OCR 검수 테이블 (같은 DB,
-                 계정은 MYSQL_USER/REVIEW_MYSQL_USER로 분리 유지)
+                 계정도 MYSQL_USER 값을 그대로 사용 — REVIEW_MYSQL_USER는
+                 읽지 않음)
 
   이미지 적재 작업 (SCT 이미지 최초 적재 시에만 실행 — 상시 트래픽 아님)
        │
@@ -117,12 +121,12 @@ SCT 원본 데이터는 운영 mielin(또는 복제본). `app/.env`에 `APP_LEVE
               └ cmaps-hub 버킷
 ```
 
-특징: 앱과 두 데이터(원본 + 검수)가 **한 인스턴스, 한 MySQL, 한 mielin DB**로
-모입니다. `APP_LEVEL=prod`이면 코드가 REVIEW 커넥션의 host/port를 MYSQL_*과
-자동으로 맞춰주므로 `.env`에 같은 값을 두 번 입력하다 어긋나는 사고가 나지
-않습니다. 계정(`MYSQL_USER` vs `REVIEW_MYSQL_USER`)과 커넥션 객체
-(`MysqlReader` vs `ReviewDbClient`)는 여전히 분리되어 있습니다 — 합쳐지는 건
-"같은 서버·같은 DB를 가리킨다"는 사실뿐입니다.
+특징: 앱과 두 데이터(원본 + 검수)가 **한 인스턴스, 한 MySQL, 한 mielin DB,
+한 계정**으로 모입니다. `APP_LEVEL=prod`이면 코드가 REVIEW 커넥션의
+host/port/계정/DB명을 전부 MYSQL_*과 자동으로 맞춰주므로(`REVIEW_MYSQL_*`
+값은 읽지 않음), `.env`에 같은 값을 두 번 입력하다 어긋나는 사고가 나지
+않습니다. 커넥션 객체(`MysqlReader` vs `ReviewDbClient`)는 여전히
+분리되어 있습니다 — 합쳐지는 건 접속 설정값뿐입니다.
 
 ---
 
@@ -131,7 +135,7 @@ SCT 원본 데이터는 운영 mielin(또는 복제본). `app/.env`에 `APP_LEVE
 | | `MYSQL_*` (SCT 원본, 읽기 전용) | `REVIEW_MYSQL_*` (OCR 검수) |
 |---|---|---|
 | **dev** (`APP_LEVEL=dev`) | 운영 mielin 원본 또는 그 복제본/스냅샷을 SELECT 전용 계정으로 연결 (문서에서 우선 권장). 값은 `.env`에 적은 그대로 사용 | 운영과 무관한 별도 DB(로컬 MySQL 등)를 `REVIEW_MYSQL_HOST/PORT`에 적은 그대로 사용. **운영 mielin을 직접 가리키지 않는다** |
-| **prod** (`APP_LEVEL=prod`) | `127.0.0.1`, DB `mielin`, SELECT 전용 계정 | `REVIEW_MYSQL_HOST/PORT`는 앱이 **무시하고 `MYSQL_HOST/PORT`를 그대로 재사용**(코드 강제) → 결국 `127.0.0.1`/`mielin`. `REVIEW_MYSQL_USER/PASSWORD/DATABASE`는 독립적으로 설정, DB명도 `mielin`으로 맞춤 |
+| **prod** (`APP_LEVEL=prod`) | `127.0.0.1`, DB `mielin`, 기존에 쓰이던 계정 | `REVIEW_MYSQL_*` 6개 값은 앱이 **전부 무시하고 `MYSQL_*` 값을 그대로 재사용**(코드 강제) → host/port/계정/DB명 모두 `MYSQL_*`과 완전히 동일해짐. `.env`에 `REVIEW_MYSQL_*`을 적어도 읽히지 않는다 |
 
 ---
 
@@ -204,7 +208,7 @@ uv --version
 
 ---
 
-## 2단계 — MySQL 상태 확인 및 DB 계정 준비 (최소 권한)
+## 2단계 — MySQL 상태 확인 및 DB 계정 확인
 
 이미 운영 중인 MySQL이므로 **설치, `mysql_secure_installation`, 재시작,
 `systemctl enable` 모두 다시 할 필요가 없습니다.**
@@ -214,51 +218,35 @@ sudo systemctl status mysql          # active (running) 확인만
 grep bind-address /etc/mysql/mysql.conf.d/mysqld.cnf   # 127.0.0.1인지 확인만, 값 변경 없음
 ```
 
-### DB 계정과 권한 (원칙)
+### DB 계정 방침 (확정)
 
-- **앱이 실제로 접속에 쓰는 계정에는 `CREATE`/`ALTER`/`DROP`을 주지 않습니다.**
-  스키마 반영(3단계의 덤프 import)은 `root` 또는 별도 마이그레이션 계정으로
-  수행하고, 끝나면 그 권한은 앱 계정에 남기지 않습니다.
-- `MYSQL_USER`(SCT 원본 조회)는 **SELECT 전용**으로 유지합니다.
-- `REVIEW_MYSQL_USER`(OCR 검수)는 **이관 대상 5개 테이블 + 뷰에 대해서만**
-  SELECT/INSERT/UPDATE를 부여합니다. `mielin.*` 전체에 권한을 주지 않습니다.
-- 둘 다 **DELETE는 부여하지 않습니다** — 검수 기록은 append-only 원칙입니다.
-- `MYSQL_USER`와 `REVIEW_MYSQL_USER`는 **같은 계정으로 강제하지 않습니다.**
-  운영에서 같은 서버·같은 DB를 가리키더라도 계정은 분리 가능하게 둡니다
-  (권한 최소화 + 사고 시 영향 범위 축소).
-
-계정 생성/권한 부여(운영자가 `root`로 직접 실행):
+**신규 계정을 만들지 않습니다.** 기존에 `mielin` 접속에 쓰이던 admin 계정을
+`MYSQL_USER`와 `REVIEW_MYSQL_USER` 양쪽에 그대로 재사용합니다 — 이 계정은
+CREATE/DROP/DELETE를 포함한 광범위한 권한을 갖고 있으며, 이번 배포에서
+권한을 축소(REVOKE)하지도 않습니다.
 
 ```bash
 sudo mysql -u root -p
 ```
 ```sql
--- 이미 SCT 조회에 쓰이던 계정이 있다면 GRANT만 재확인하고, 없다면 새로 만든다.
-CREATE USER IF NOT EXISTS 'sct_reader'@'localhost' IDENTIFIED BY '<strong-password>';
-GRANT SELECT ON mielin.* TO 'sct_reader'@'localhost';
-
--- OCR 검수 전용 계정 — 5개 테이블 + 뷰에만 권한을 준다 (mielin.* 전체 아님).
-CREATE USER IF NOT EXISTS 'ocr_review_app'@'localhost' IDENTIFIED BY '<strong-password>';
-GRANT SELECT, INSERT, UPDATE ON mielin.ocr_admin_comments     TO 'ocr_review_app'@'localhost';
-GRANT SELECT, INSERT, UPDATE ON mielin.ocr_negative_keywords  TO 'ocr_review_app'@'localhost';
-GRANT SELECT, INSERT, UPDATE ON mielin.ocr_review_comments    TO 'ocr_review_app'@'localhost';
-GRANT SELECT, INSERT, UPDATE ON mielin.ocr_review_edits       TO 'ocr_review_app'@'localhost';
-GRANT SELECT, INSERT, UPDATE ON mielin.ocr_reviewers          TO 'ocr_review_app'@'localhost';
-GRANT SELECT ON mielin.v_sct_review_status TO 'ocr_review_app'@'localhost';
-FLUSH PRIVILEGES;
+-- 신규 생성 없음 — 기존 계정의 현재 권한만 확인한다.
+SHOW GRANTS FOR '<기존 admin 계정>'@'localhost';
 ```
 
-권한 확인:
+이 결정에 따른 실질적인 보호장치는 **DB 권한이 아니라 앱 코드 레벨**에
+있다는 점을 알아두세요:
 
-```sql
-SHOW GRANTS FOR 'sct_reader'@'localhost';
-SHOW GRANTS FOR 'ocr_review_app'@'localhost';
-```
-
-> 3단계의 덤프 import 자체는 `CREATE TABLE`/`DROP TABLE`이 필요하므로 위
-> 앱 계정이 아니라 `root`(또는 별도 마이그레이션 계정)로 실행합니다. 위
-> `ocr_review_app` 계정에는 애초에 `CREATE`/`DROP` 권한을 주지 않았으므로,
-> 앱 자체는 스키마를 변경할 수 없습니다.
+- `MysqlReader.select_all()`(`app/mysql_reader.py`)이 `SELECT`로 시작하지
+  않는 문장을 실행 시점에 거부합니다 — `MYSQL_USER`가 쓰기 권한을 갖고
+  있어도, 이 앱을 통해서는 SCT 원본 데이터에 쓰기가 나가지 않습니다.
+- `ReviewDbClient`(`app/review_client.py`)는 SELECT/INSERT/UPDATE 문만
+  실행하고 DELETE 문 자체가 코드에 없습니다.
+- 반대로 말하면, **앱 코드의 버그나 향후 변경이 이 가드를 우회하면 DB
+  권한으로는 막히지 않습니다.** 계정 권한 자체로 최소화하고 싶다면
+  부록 "선택 사항 — 계정 최소권한 분리"를 참고하세요(지금 배포에는
+  적용하지 않기로 확정).
+- 3단계의 덤프 import(`CREATE`/`DROP TABLE` 필요)도 이 계정으로 그대로
+  수행할 수 있습니다 — 별도 마이그레이션 계정을 만들 필요가 없습니다.
 
 ---
 
@@ -341,9 +329,9 @@ import하면 기존 데이터가 **삭제된 뒤 새로 만들어집니다.** �
 >   VIEW mielin.v_sct_review_status AS
 >   <SHOW CREATE VIEW 결과에서 그대로 복사한 SELECT문>;
 >   ```
-> 어느 쪽이든 뷰를 SELECT하는 `ocr_review_app` 계정이 DEFINER 계정의 권한으로
-> 실행되므로, DEFINER 계정이 실제로 운영 EC2에 존재하고 잠겨있지 않은지
-> 먼저 확인하세요.
+> 어느 쪽이든 뷰를 SELECT하는 `REVIEW_MYSQL_USER` 계정이 DEFINER 계정의
+> 권한으로 실행되므로, DEFINER 계정이 실제로 운영 EC2에 존재하고 잠겨있지
+> 않은지 먼저 확인하세요.
 
 로컬 → EC2로 전송:
 
@@ -417,7 +405,8 @@ mysql -u root -p mielin -e "
 
 - [ ] **`reviewer-a`, `reviewer-b`**: 개발/테스트용 계정으로 보입니다. 운영
       반영 전에 **삭제할지 비활성화(`is_active=0`)할지 팀 확인 후 결정**하세요.
-      앱 계정에는 DELETE가 없으므로, 지우기로 했다면 `root`로 직접 실행합니다.
+      앱 코드 자체는 DELETE 문을 실행하지 않으므로(화면/API로는 지울 수
+      없음), 지우기로 했다면 아래처럼 `mysql` 클라이언트로 직접 실행합니다.
       ```sql
       -- 삭제 대신 비활성화(권장 — 이력 보존)
       UPDATE ocr_reviewers SET is_active = 0 WHERE username IN ('reviewer-a', 'reviewer-b');
@@ -485,10 +474,8 @@ nano app/.env   # 또는 vim
 | `APP_LEVEL` | `prod` |
 | `MYSQL_HOST` | `127.0.0.1` |
 | `MYSQL_DATABASE` | `mielin` |
-| `MYSQL_USER` / `PASSWORD` | 2단계에서 만든 SELECT 전용 계정(`sct_reader`) |
-| `REVIEW_MYSQL_HOST` / `PORT` | `APP_LEVEL=prod`이면 앱이 무시하고 `MYSQL_HOST/PORT`를 쓰므로 값을 비워도 되지만, 문서화를 위해 `MYSQL_HOST`/`MYSQL_PORT`와 같은 값을 적어두는 것을 권장 |
-| `REVIEW_MYSQL_DATABASE` | `mielin` |
-| `REVIEW_MYSQL_USER` / `PASSWORD` | 2단계에서 만든 검수 전용 계정(`ocr_review_app`) — `MYSQL_USER`와 **다른 계정** |
+| `MYSQL_USER` / `PASSWORD` | 이 EC2에서 mielin 접속에 이미 쓰이고 있는 계정 정보 그대로 |
+| `REVIEW_MYSQL_*` (전체 6개) | `APP_LEVEL=prod`이면 앱이 이 값들을 전부 무시하고 `MYSQL_*` 값을 그대로 쓰므로 비워둬도 됩니다. 문서화를 위해 `MYSQL_*`과 같은 값(`127.0.0.1`/`mielin`/같은 계정)을 적어두는 것을 권장 |
 | `AWS_ACCESS_KEY_ID` / `SECRET` | **로컬 키를 재사용하지 말고 새로 발급**한 키 사용 |
 | `S3_BUCKET` / `AWS_REGION` | `cmaps-hub` / `ap-northeast-2` (로컬과 동일) |
 | `SESSION_SECRET_KEY` | 새로 생성 — 아래 명령 참고 |
@@ -700,13 +687,51 @@ sudo journalctl -u sct-review -n 50 --no-pager   # 에러 없는지 확인
 
 ---
 
+## 부록 — 선택 사항: 계정 최소권한 분리 (이번 배포에는 적용하지 않음)
+
+지금은 기존 admin 계정(CREATE/DROP/DELETE 포함 광범위 권한)을
+`MYSQL_USER`/`REVIEW_MYSQL_USER` 양쪽에 그대로 재사용하기로 확정했습니다.
+DB 권한 자체로 더 좁히고 싶어지면(다른 프로젝트가 같은 계정을 공유하지 않게
+되는 시점 등), 아래처럼 **신규 계정을 만들지 않고 기존 계정 권한을 REVOKE로
+축소**하거나, 완전히 분리하고 싶다면 신규 계정 2개를 만드는 방법이 있습니다.
+둘 다 지금 당장 실행하는 단계가 아니라 향후 참고용입니다.
+
+```sql
+-- 방법 A: 계정은 그대로 두고 권한만 축소 (다른 용도로 이 계정을 쓰는
+-- 곳이 없는지 먼저 확인 — 있다면 그쪽이 깨질 수 있음)
+REVOKE DELETE, CREATE, DROP, ALTER ON mielin.* FROM '<admin 계정>'@'localhost';
+FLUSH PRIVILEGES;
+
+-- 방법 B: 완전히 분리된 신규 계정 (SCT 조회는 SELECT 전용,
+-- OCR 검수는 이관 대상 5개 테이블 + 뷰에만)
+CREATE USER 'sct_reader'@'localhost' IDENTIFIED BY '<strong-password>';
+GRANT SELECT ON mielin.* TO 'sct_reader'@'localhost';
+
+CREATE USER 'ocr_review_app'@'localhost' IDENTIFIED BY '<strong-password>';
+GRANT SELECT, INSERT, UPDATE ON mielin.ocr_admin_comments     TO 'ocr_review_app'@'localhost';
+GRANT SELECT, INSERT, UPDATE ON mielin.ocr_negative_keywords  TO 'ocr_review_app'@'localhost';
+GRANT SELECT, INSERT, UPDATE ON mielin.ocr_review_comments    TO 'ocr_review_app'@'localhost';
+GRANT SELECT, INSERT, UPDATE ON mielin.ocr_review_edits       TO 'ocr_review_app'@'localhost';
+GRANT SELECT, INSERT, UPDATE ON mielin.ocr_reviewers          TO 'ocr_review_app'@'localhost';
+GRANT SELECT ON mielin.v_sct_review_status TO 'ocr_review_app'@'localhost';
+FLUSH PRIVILEGES;
+```
+
+**주의**: 지금 `app/config.py`는 `APP_LEVEL=prod`일 때 `REVIEW_MYSQL_*` 값을
+아예 읽지 않고 `MYSQL_*`을 그대로 재사용하도록 코드로 고정돼 있습니다. 위
+방법 B(완전 분리)로 전환하려면 `.env`에 `REVIEW_MYSQL_USER`/`PASSWORD`를
+새로 채우는 것만으로는 반영되지 않고, `app/config.py`의 prod 분기(REVIEW_MYSQL_*을
+무시하고 MYSQL_*을 재사용하는 부분)를 되돌리는 코드 수정이 함께 필요합니다.
+
+---
+
 ## 부록 — 문제 해결
 
 | 증상 | 확인할 것 |
 |---|---|
 | 서비스가 즉시 죽음(active (running)이 안 됨) | `sudo journalctl -u sct-review -n 50` — `APP_LEVEL` 또는 `SESSION_SECRET_KEY` 관련 에러 메시지가 원인일 가능성이 높음(8단계 참고) |
 | 브라우저에서 접속 자체가 안 됨 | 보안그룹 8011 인바운드에 접속 IP가 화이트리스트로 등록돼 있는지, `systemctl status sct-review` |
-| 로그인 화면은 뜨는데 로그인 실패 | `.env`의 `REVIEW_MYSQL_*`(및 prod에서 실제로 쓰이는 `MYSQL_HOST/PORT`) 값, `mysql -u ocr_review_app -p mielin`로 직접 접속 테스트 |
+| 로그인 화면은 뜨는데 로그인 실패 | `.env`의 `REVIEW_MYSQL_*`(및 prod에서 실제로 쓰이는 `MYSQL_HOST/PORT`) 값, `mysql -u <admin 계정> -p mielin`로 직접 접속 테스트 |
 | 목록 조회 시 500/빈 화면 | `.env`의 `MYSQL_*` 값, `mielin` DB 테이블이 3단계에서 정상 이관됐는지 |
 | 이미지가 안 보임 | `.env`의 `AWS_*`/`S3_BUCKET` 값, IAM 키 권한(cmaps-hub 버킷 GetObject) |
 | 시작 로그의 APP_LEVEL/host가 기대와 다름 | 잘못된 `.env`가 배포됐거나 systemd `Environment=`가 빠진 것 — 즉시 서비스를 내리고 5·8단계 재확인 |
