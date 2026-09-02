@@ -33,10 +33,9 @@ def _run(module: str, overrides: dict[str, str]) -> subprocess.CompletedProcess[
     )
 
 
-def test_missing_app_level_fails_startup():
+def test_missing_app_level_defaults_to_dev():
     result = _run("app.config", {"APP_LEVEL": ""})
-    assert result.returncode != 0
-    assert "APP_LEVEL" in result.stderr
+    assert result.returncode == 0, result.stderr
 
 
 def test_invalid_app_level_fails_startup():

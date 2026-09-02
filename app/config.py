@@ -22,10 +22,16 @@ def _resolve_app_level() -> str:
     """실행 환경(dev/prod)을 결정한다.
 
     APP_LEVEL은 여기서 처음 만들어지는 게 아니라 프로세스 환경변수 또는
-    app/.env 안의 APP_LEVEL=dev|prod 줄에서 온다. 기본값을 두지 않는 이유는,
-    누락됐을 때 조용히 운영(prod)으로 기동되는 사고를 막기 위해서다.
+    app/.env 안의 APP_LEVEL=dev|prod 줄에서 온다. **값이 아예 없으면 dev로
+    간주한다** — 운영(prod)으로 기본값을 두지 않으므로, 깜빡 빠뜨려도
+    조용히 운영 모드로 뜨는 사고는 나지 않는다(운영은 systemd unit의
+    `Environment=APP_LEVEL=prod`로 항상 명시적으로 지정한다). 다만 값이
+    있는데 dev/prod가 아닌 오타 등은 값을 명시했는데 틀린 경우이므로 계속
+    기동 실패로 처리한다.
     """
     app_level = os.environ.get("APP_LEVEL", "").strip()
+    if not app_level:
+        return "dev"
     if app_level not in VALID_APP_LEVELS:
         raise RuntimeError(
             f"APP_LEVEL이 올바르지 않습니다 (현재: {app_level!r}). "

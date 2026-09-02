@@ -143,14 +143,21 @@ host/port/계정/DB명을 전부 MYSQL_*과 자동으로 맞춰주므로(`REVIEW
 
 - `app/.env` **하나의 파일** 안에 `APP_LEVEL=dev` 또는 `APP_LEVEL=prod`를
   적습니다 — 파일을 두 개로 나누지 않습니다.
-- 값이 없거나 `dev`/`prod`가 아니면 **앱이 기동 자체를 거부**합니다
-  (`app/config.py`). 기본값을 `prod`로 두지 않으므로, 값을 깜빡 지워도
-  조용히 운영 모드로 뜨는 사고는 나지 않습니다 — 대신 즉시 에러를 내고 죽습니다.
+- **값 자체가 없으면(줄을 지우거나 빈 값) 자동으로 `dev`로 간주합니다.**
+  `prod`로는 절대 기본 처리하지 않으므로, 깜빡 빠뜨려도 조용히 운영 모드로
+  뜨는 사고는 나지 않습니다 — 대신 dev로 뜨는데, **운영 EC2에서 이 상태가
+  되면 REVIEW_MYSQL 연결이 (비어 있을) `REVIEW_MYSQL_*` 값을 그대로 읽어서
+  검수 기능이 503로 죽습니다.** 즉 운영에서 `APP_LEVEL=prod`를 빠뜨리면
+  기동 자체는 실패하지 않고 검수 화면이 고장 나는 형태로 드러납니다 —
+  8단계 배포 직후 시작 로그를 반드시 확인하세요.
+- 값이 있는데 `dev`/`prod`가 아니면(오타 등) **앱이 기동 자체를 거부**합니다
+  (`app/config.py`).
 - 로컬 개발 실행: `app/.env`에 `APP_LEVEL=dev`를 적어두고 평소처럼
   `uv run uvicorn app.main:app --reload --port 8011`로 실행합니다.
-- 운영 systemd 서비스: unit 파일에 `Environment=APP_LEVEL=prod`를 명시합니다
-  (8단계 참고). systemd가 이미 프로세스 환경변수로 넘겨주므로 `.env`
-  파일에도 같은 값을 적어 일치시켜 둡니다(둘 다 `prod`).
+- 운영 systemd 서비스: unit 파일에 `Environment=APP_LEVEL=prod`를 **반드시**
+  명시합니다(8단계 참고) — 위에서 설명했듯 이걸 빠뜨리면 기동은 되지만
+  운영에서 검수 기능이 고장 납니다. systemd가 이미 프로세스 환경변수로
+  넘겨주므로 `.env` 파일에도 같은 값을 적어 일치시켜 둡니다(둘 다 `prod`).
 - 시작 로그에 `APP_LEVEL`과 두 DB의 `host:port/database`만 비밀번호 없이
   찍힙니다 — `sudo journalctl -u sct-review -n 20`으로 첫 줄만 봐도 잘못된
   `.env`로 떴는지(예: 운영인데 dev 값) 바로 알 수 있습니다.
@@ -475,7 +482,7 @@ nano app/.env   # 또는 vim
 | `MYSQL_HOST` | `127.0.0.1` |
 | `MYSQL_DATABASE` | `mielin` |
 | `MYSQL_USER` / `PASSWORD` | 이 EC2에서 mielin 접속에 이미 쓰이고 있는 계정 정보 그대로 |
-| `REVIEW_MYSQL_*` (전체 6개) | `APP_LEVEL=prod`이면 앱이 이 값들을 전부 무시하고 `MYSQL_*` 값을 그대로 쓰므로 비워둬도 됩니다. 문서화를 위해 `MYSQL_*`과 같은 값(`127.0.0.1`/`mielin`/같은 계정)을 적어두는 것을 권장 |
+| `REVIEW_MYSQL_*` (전체 6개) | `APP_LEVEL=prod`이면 앱이 이 값들을 전부 무시하고 `MYSQL_*` 값을 그대로 쓰므로 비워둬도 됩니다. 다만 **`MYSQL_*`과 같은 값(`127.0.0.1`/`mielin`/같은 계정)을 채워두는 것을 강력히 권장**합니다 — 비워두면, 나중에 systemd unit의 `Environment=APP_LEVEL=prod`가 실수로 빠져 앱이 dev로 뜨는 사고가 났을 때 검수 기능이 통째로 503로 죽습니다. 채워뒀다면 같은 사고가 나도 검수는 정상 동작합니다(뒤에서 실제로는 dev 모드로 도는 문제만 남음) |
 | `AWS_ACCESS_KEY_ID` / `SECRET` | **로컬 키를 재사용하지 말고 새로 발급**한 키 사용 |
 | `S3_BUCKET` / `AWS_REGION` | `cmaps-hub` / `ap-northeast-2` (로컬과 동일) |
 | `SESSION_SECRET_KEY` | 새로 생성 — 아래 명령 참고 |
@@ -564,9 +571,10 @@ RestartSec=3
 WantedBy=multi-user.target
 ```
 
-- `Environment=APP_LEVEL=prod`를 반드시 넣으세요 — 이게 없고 `.env`에도
-  `APP_LEVEL`이 비어 있으면 서비스가 기동하지 못하고 즉시 죽습니다(의도된
-  동작입니다 — 3번 "APP_LEVEL 환경 분리" 참고).
+- `Environment=APP_LEVEL=prod`를 반드시 넣으세요 — **이게 없고 `.env`에도
+  `APP_LEVEL`이 비어 있으면 서비스는 죽지 않고 dev 모드로 떠 버립니다**
+  (기동 실패가 아니라 조용한 오배포 — "APP_LEVEL 환경 분리" 절 참고). 아래
+  `journalctl` 확인으로 반드시 `APP_LEVEL=prod`인지 눈으로 봐야 합니다.
 - `ExecStart`의 `uv` 경로는 `which uv`로 실제 경로를 확인해 맞추세요.
 - `User`는 소스가 있는 계정과 맞춰야 합니다(예시는 `ubuntu`).
 - `mysql.service`는 이미 이 인스턴스에서 다른 용도로도 쓰이고 있으므로,
@@ -729,7 +737,8 @@ FLUSH PRIVILEGES;
 
 | 증상 | 확인할 것 |
 |---|---|
-| 서비스가 즉시 죽음(active (running)이 안 됨) | `sudo journalctl -u sct-review -n 50` — `APP_LEVEL` 또는 `SESSION_SECRET_KEY` 관련 에러 메시지가 원인일 가능성이 높음(8단계 참고) |
+| 서비스가 즉시 죽음(active (running)이 안 됨) | `sudo journalctl -u sct-review -n 50` — `APP_LEVEL`(값이 있는데 dev/prod가 아닌 오타) 또는 `SESSION_SECRET_KEY` 관련 에러 메시지가 원인일 가능성이 높음(8단계 참고) |
+| 서비스는 떠 있는데 검수 화면만 계속 503 | 시작 로그 첫 줄에 `APP_LEVEL=dev`가 찍혀 있지 않은지 확인 — systemd unit의 `Environment=APP_LEVEL=prod`가 빠졌고 `REVIEW_MYSQL_*`도 비워뒀을 때 나는 증상(APP_LEVEL 미설정은 기동 실패가 아니라 dev로 조용히 떨어짐) |
 | 브라우저에서 접속 자체가 안 됨 | 보안그룹 8011 인바운드에 접속 IP가 화이트리스트로 등록돼 있는지, `systemctl status sct-review` |
 | 로그인 화면은 뜨는데 로그인 실패 | `.env`의 `REVIEW_MYSQL_*`(및 prod에서 실제로 쓰이는 `MYSQL_HOST/PORT`) 값, `mysql -u <admin 계정> -p mielin`로 직접 접속 테스트 |
 | 목록 조회 시 500/빈 화면 | `.env`의 `MYSQL_*` 값, `mielin` DB 테이블이 3단계에서 정상 이관됐는지 |

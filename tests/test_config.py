@@ -65,17 +65,26 @@ def test_mysql_and_review_mysql_are_independent_settings_objects(monkeypatch):
     assert settings.review_mysql is not settings2.review_mysql
 
 
-@pytest.mark.parametrize("bad_value", ["production", "DEV", "staging", " "])
+@pytest.mark.parametrize("bad_value", ["production", "DEV", "staging"])
 def test_load_settings_rejects_invalid_app_level(monkeypatch, bad_value):
+    # 값이 있는데 dev/prod가 아닌 경우(오타 등)는 여전히 기동 실패다.
     monkeypatch.setenv("APP_LEVEL", bad_value)
     with pytest.raises(RuntimeError, match="APP_LEVEL"):
         config.load_settings()
 
 
-def test_load_settings_rejects_missing_app_level(monkeypatch):
-    monkeypatch.delenv("APP_LEVEL", raising=False)
-    with pytest.raises(RuntimeError, match="APP_LEVEL"):
-        config.load_settings()
+@pytest.mark.parametrize("missing_value", [None, "", "   "])
+def test_load_settings_defaults_missing_app_level_to_dev(monkeypatch, missing_value):
+    # 값이 아예 없으면(미설정/빈 문자열/공백) prod로 떨어지지 않고 dev로
+    # 간주한다 — 실패하지 않는다.
+    if missing_value is None:
+        monkeypatch.delenv("APP_LEVEL", raising=False)
+    else:
+        monkeypatch.setenv("APP_LEVEL", missing_value)
+
+    settings = config.load_settings()
+
+    assert settings.app_level == "dev"
 
 
 def test_session_secret_key_missing_is_reported_as_unconfigured(monkeypatch):
