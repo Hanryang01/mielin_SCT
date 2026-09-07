@@ -50,11 +50,20 @@ SELECT
     c.birth_date,
     c.gender,
 
-    -- SCT age_group 계산 (resolve_sct_age_group() 로직 응용, 기준일=assessment 생성일)
+    -- SCT age_group 계산 (resolve_sct_age_group() 로직 응용, 기준일=assessment_date, 검사 진행일)
+    --
+    -- YEAR(a.created_at) - YEAR(c.birth_date) 방식은 생일이 그 해에 아직 지나지 않은
+    -- 경우를 무시해 실제 나이보다 최대 한 살 많게 계산한다 (예: assessment_id=2700,
+    -- 생년월일 2008-11-13, 검사일 2026-09-05 → YEAR 차이는 18이지만 생일 전이라 실제
+    -- 만 나이는 17 — 성인이 아니라 청소년). 2026-09-07 기준 sct_import_records 전체에서
+    -- 이 방식으로 2,508건이 잘못 분류돼 있어 TIMESTAMPDIFF(YEAR, ...)로 일괄 수정했다.
+    -- 기준 시각도 a.created_at(DB row 생성 시각) 대신 a.assessment_date(실제 검사
+    -- 진행일)로 바꾼다 — 과거 검사가 나중에 백필/재동기화되면 created_at이 "지금"에
+    -- 가까운 값이 될 수 있어, 검사 당시 나이가 아니라 동기화 시점 나이로 계산될 위험이 있다.
     CASE
         WHEN c.birth_date IS NULL THEN '성인'
-        WHEN YEAR(a.created_at) - YEAR(c.birth_date) < 12 THEN '아동'
-        WHEN YEAR(a.created_at) - YEAR(c.birth_date) < 18 THEN '청소년'
+        WHEN TIMESTAMPDIFF(YEAR, c.birth_date, a.assessment_date) < 12 THEN '아동'
+        WHEN TIMESTAMPDIFF(YEAR, c.birth_date, a.assessment_date) < 18 THEN '청소년'
         ELSE '성인'
     END                                                                       AS sct_age_group,
 
@@ -98,8 +107,8 @@ LEFT JOIN inspection_content_sct ics
    AND ics.question_number = ad.sequence_number
    AND ics.age_group = CASE
         WHEN c.birth_date IS NULL THEN '성인'
-        WHEN YEAR(a.created_at) - YEAR(c.birth_date) < 12 THEN '아동'
-        WHEN YEAR(a.created_at) - YEAR(c.birth_date) < 18 THEN '청소년'
+        WHEN TIMESTAMPDIFF(YEAR, c.birth_date, a.assessment_date) < 12 THEN '아동'
+        WHEN TIMESTAMPDIFF(YEAR, c.birth_date, a.assessment_date) < 18 THEN '청소년'
         ELSE '성인'
    END
    AND ics.is_active = 1
