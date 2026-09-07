@@ -18,8 +18,12 @@ export function escapeHtml(value) {
  *
  *  두 화면이 같은 id의 마크업을 쓰므로 호출 시점에 찾아 쓴다 — 모듈 로드
  *  시점에 잡아두면 이 함수를 쓰는 화면마다 그 요소가 반드시 있어야 한다는
- *  숨은 전제가 생긴다. */
-export function showMessage(text, elementId = "message") {
+ *  숨은 전제가 생긴다.
+ *
+ *  type("error" 기본값 / "success")로 색을 가른다(2026-09-07) — 실패든
+ *  성공이든 전부 빨간 줄로 뜨던 걸 구분한다. 기본값이 "error"라 기존
+ *  호출부(옵션 없이 텍스트만 넘기던 곳)는 지금처럼 빨간색 그대로 나온다. */
+export function showMessage(text, { type = "error", elementId = "message" } = {}) {
   const el = document.getElementById(elementId);
   if (!el) return;
   if (!text) {
@@ -29,6 +33,7 @@ export function showMessage(text, elementId = "message") {
   }
   el.hidden = false;
   el.textContent = text;
+  el.classList.toggle("message-success", type === "success");
 }
 
 /** 서버가 준 대괄호 표기(§5.3)를 강조 표시로 바꾼다.

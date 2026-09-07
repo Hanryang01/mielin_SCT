@@ -79,6 +79,10 @@ let currentPage = 1;
 let currentItems = [];
 let currentUser = null;
 const selected = new Set();
+// 지금 페이지를 처음 불러왔을 때 PAGE_SIZE만큼 꽉 찼었는지 — "다 처리해서
+// 0건이 됨"을 다룰 때(handlePossibleDepletion) 더 있을 가능성이 있는지
+// 판단하는 데 쓴다.
+let currentPageWasFull = false;
 
 
 function recordKey(item) {
@@ -107,6 +111,27 @@ function describePassReview(review) {
     ? ` · ${escapeHtml(describeDifficulty(review.ocr_difficulty_level))}`
     : "";
   return `패스${level}${negativeBadge(review.contains_negative_expression)}`;
+}
+
+/** [수정] 저장 직후 #message 배너에 띄울 순수 텍스트 한 줄(2026-09-07).
+ *
+ *  describePassReview/myReviewPanel의 배지들은 <span> 태그가 섞인 HTML이라
+ *  showMessage()가 textContent로 꽂으면 태그가 글자 그대로 보인다 — 그래서
+ *  같은 정보를 태그 없는 문장으로 따로 만든다.
+ *
+ *  수정 저장은 필터에 안 맞으면 카드 자체가 바로 사라질 수 있어(matchesCurrentFilter/
+ *  removeCard), 카드를 다시 보여주는 대신 "방금 뭐가 저장됐는지"를 이 한 줄로
+ *  확인시켜준다. */
+function describeSavedReviewPlain(review) {
+  if (!review) return "";
+  const negativeText = review.contains_negative_expression ? " · 부정 표현" : "";
+  if (review.review_type !== "transcription") {
+    const level = review.ocr_difficulty_level ? ` · ${describeDifficulty(review.ocr_difficulty_level)}` : "";
+    return `패스${level}${negativeText}`;
+  }
+  const isUnreadable = !review.typed_text && review.ocr_difficulty_level === UNREADABLE_LEVEL;
+  const level = isUnreadable ? "판독 불가" : describeDifficulty(review.ocr_difficulty_level) || "난이도 -";
+  return `타이핑 · ${level}${negativeText}`;
 }
 
 /** 배지에는 숫자를 넣지 않는다(2026-08-21) — "완료 (1/2)"처럼 아직 상대가
@@ -519,14 +544,22 @@ async function runBulkPass() {
     // 서버가 돌려준 갱신 상태를 그대로 반영한다 (재조회 없음). 영향받은
     // 카드만 새로 그려서, 이번 일괄 패스에 포함되지 않은 다른 카드의 입력
     // 중인 내용(난이도 선택·타이핑 등)을 건드리지 않는다 — updateCard 주석 참고.
-    for (const item of currentItems) {
-      const st = data.states?.[recordKey(item)];
-      if (st) {
-        item.__review = st;
-        updateCard(item);
-      }
+    //
+    // 갱신 대상을 먼저 별도 배열로 뽑아둔다 — updateCard가 필터에 안 맞는
+    // 카드를 currentItems에서 지울 수 있는데(removeCard), currentItems를
+    // 직접 for...of로 돌면서 그 배열 자체를 지우면 순회 중 항목이 밀려 다음
+    // 항목을 건너뛸 수 있다.
+    const toUpdate = currentItems.filter((item) => data.states?.[recordKey(item)]);
+    for (const item of toUpdate) {
+      item.__review = data.states[recordKey(item)];
+      updateCard(item);
     }
-    selected.clear();
+    // 이번에 실제로 서버에 보낸 건(withLevel)만 선택 해제한다 — 난이도 미선택/
+    // 판독불가라 제외된 건은 체크박스가 화면에 그대로 남아있으므로, selected를
+    // 통째로 비우면 "체크는 돼 있는데 selected는 비어서 일괄 패스 바가 사라지는"
+    // 불일치가 생긴다(2026-09-07 발견). removeCard가 이미 지운 카드는 여기서
+    // 다시 지워도 안전하다(Set.delete는 없는 키에 대해 조용히 무시한다).
+    for (const { item } of withLevel) selected.delete(recordKey(item));
 
     const { created = 0, duplicate = 0, invalid_reference: invalid = 0 } = data.counts || {};
     const notes = [];
@@ -534,7 +567,23 @@ async function runBulkPass() {
     if (unreadableCount) notes.push(`판독불가 ${unreadableCount}건은 제외(타이핑으로 제출해주세요)`);
     if (duplicate) notes.push(`이미 처리한 ${duplicate}건은 건너뜀`);
     if (invalid) notes.push(`잘못된 참조 ${invalid}건 실패`);
-    showMessage(notes.length ? `${created}건 패스 처리 — ${notes.join(", ")}` : "");
+    if (notes.length) {
+      // 하나라도 실제로 처리됐으면(created > 0) 전체 결과를 성공(초록)으로
+      // 본다 — 일부 제외/건너뜀 안내가 섞여 있어도 주된 결과는 "처리됐다"이기
+      // 때문이다. 하나도 못 넘겼으면(created === 0) 안내만 남기고 기본색(빨강)
+      // 그대로 둔다.
+      showMessage(`${created}건 패스 처리 — ${notes.join(", ")}`, {
+        type: created > 0 ? "success" : "error",
+      });
+    } else {
+      showMessage("");
+    }
+
+    // 루프가 완전히 끝난 뒤 딱 한 번만 "다 비었는지" 확인한다(2026-09-07) —
+    // removeCard 주석 참고. 루프 도중에 확인하면 아직 갱신 안 한 다른 카드의
+    // DOM을 못 찾게 되거나(화면 깜빡임), 방금 위에서 띄운 처리 결과 메시지가
+    // 뒤섞일 수 있다.
+    await handlePossibleDepletion();
   } catch (err) {
     showMessage(`일괄 패스 실패: ${err.message}`);
   } finally {
@@ -571,6 +620,109 @@ async function postReview(body) {
   return res.json();
 }
 
+/** 지금 켜져 있는 "내 처리 상태" 필터에 이 항목이 여전히 속하는지 본다.
+ *
+ *  제출/패스 직후 서버가 내려준 새 상태가 지금 필터와 안 맞으면(예: "미처리"를
+ *  보는 중에 방금 패스함) 카드를 갱신만 하는 대신 목록에서 지워야, 처리한
+ *  항목이 "미처리" 목록에 그대로 남아있는 문제(2026-09-07 요청)가 없어진다.
+ *
+ *  난이도 필터도 같은 이유로 함께 본다(2026-09-07 추가) — 예를 들어 "패스" +
+ *  "난이도 2"만 켜둔 채 [수정]으로 난이도를 3으로 바꿔 저장하면, review_type은
+ *  여전히 패스라 위 체크만으로는 그대로 남아버린다. main.py의 난이도 필터
+ *  규칙(§5.1)과 동일하게: "미처리"에서는 무시하고, 그 외에는 내가 남긴
+ *  난이도가 선택된 값 중 하나여야 한다 — 처리 자체가 없으면(mine 없음) 무조건
+ *  탈락한다(서버도 내가 그 난이도로 처리한 것만 남기므로). 판독불가(5)는
+ *  difficultyFilter가 1~4와 같은 값 취급을 하므로 따로 분기하지 않아도 된다.
+ *
+ *  부정표현("부정 표현만") 필터는 여기 포함하지 않는다 — 서버 규칙(§5.2)이
+ *  "내가 확정한 것 OR (내가 처리 안 했고 + OCR에 키워드가 있는 것)"이라 단순
+ *  비교로 못 옮기고, 그대로 옮기려면 활성 키워드 목록까지 클라이언트가
+ *  따로 들고 있어야 해서 서버와 이중 유지보수해야 하는 부담이 있다 — 알려진
+ *  한계로 남겨둔다. */
+function matchesCurrentFilter(state) {
+  const filter = mineFilter.value();
+  if (filter === "unreviewed") return !state.mine_submitted;
+
+  const mine = myReview(state);
+
+  if (filter !== "all") {
+    if (!mine) return false;
+    const matchesMine = filter === "pass"
+      ? mine.review_type !== "transcription"
+      : mine.review_type === "transcription";
+    if (!matchesMine) return false;
+  }
+
+  const levels = difficultyFilter.levels();
+  if (levels.length && (!mine || !levels.includes(mine.ocr_difficulty_level))) {
+    return false;
+  }
+
+  return true;
+}
+
+/** 카드를 화면과 currentItems에서 지운다 — 필터에 더 이상 안 맞는 항목용.
+ *
+ *  목록이 통째로 비어도 여기서는 아무 것도 다시 그리지 않는다(2026-09-07
+ *  변경) — 일괄 패스처럼 여러 카드를 연달아 지우는 도중에 여기서 곧바로
+ *  화면을 바꾸면, 아직 갱신해야 할 다른 카드의 DOM을 못 찾게 되어 화면이
+ *  깜빡이거나 방금 뜬 처리 결과 메시지가 뒤섞이는 문제가 있었다. "다 지웠을
+ *  때 뭘 보여줄지"는 호출부가 한 배치(일괄 패스 루프, 또는 단건 제출)를
+ *  전부 끝낸 뒤 handlePossibleDepletion()으로 한 번만 판단한다. */
+function removeCard(item, el) {
+  el?.remove();
+  const idx = currentItems.indexOf(item);
+  if (idx !== -1) currentItems.splice(idx, 1);
+  selected.delete(recordKey(item));
+}
+
+/** 목록이 완전히 비었을 때 보여줄 문구 — 지금 켜진 "내 처리 상태" 필터에
+ *  따라 다르게 말한다(2026-09-07). "미처리"가 0건인 것만 "모든 검수를
+ *  완료하였습니다"라고 부를 수 있다 — "패스"/"수정"/"전체" 탭은 [수정]으로
+ *  분류가 바뀌거나(review_type 변경) 난이도 필터를 좁혀서도 0건이 될 수
+ *  있는데, 그건 검수가 다 끝났다는 뜻이 아니라 "지금 이 필터 조건에 맞는
+ *  게 없다"는 뜻일 뿐이라 똑같이 "모든 검수를 완료"라고 하면 과장이 된다. */
+function allDoneMessage() {
+  const filter = mineFilter.value();
+  if (filter === "unreviewed") return "모든 검수를 완료하였습니다.";
+  if (filter === "all") return "지금 필터 조건에 해당하는 항목이 더 이상 없습니다.";
+  return `"${MINE_FILTER_LABEL[filter]}" 필터에 해당하는 항목이 더 이상 없습니다.`;
+}
+
+/** 목록이 완전히 비었을 때 화면을 보여준다.
+ *  #message 배너는 건드리지 않는다 — 직전 처리 결과 메시지("N건 패스 처리",
+ *  "수정 저장 완료 — ...")는 여기와 별개 영역이라 그대로 남는다. */
+function renderAllDone() {
+  tableWrap.innerHTML = `<div class="empty">${escapeHtml(allDoneMessage())}</div>`;
+  updateBulkBar();
+}
+
+/** 카드 갱신(들)을 끝낸 뒤, 목록이 통째로 비었으면 뭘 보여줄지 정한다
+ *  (2026-09-07). removeCard 자신은 아무 것도 안 하므로, 일괄 패스 루프나
+ *  단건 제출·수정처럼 "한 번의 사용자 동작"이 끝나는 지점에서 딱 한 번만
+ *  호출해야 한다 — 그래야 위 removeCard 주석의 재진입 문제가 안 생긴다.
+ *
+ *  - 지금 페이지가 로드될 때 이미 PAGE_SIZE보다 적게 왔었다면(마지막
+ *    페이지였다는 뜻) 재조회 없이 바로 완료 화면을 보여준다.
+ *  - PAGE_SIZE만큼 꽉 차서 로드됐었다면(더 있을 수 있다는 뜻) 같은 페이지를
+ *    조용히 한 번만 다시 불러와 본다(메시지는 지우지 않는다). 그 결과도
+ *    0건이면 그때 완료 화면을 보여준다 — 재조회를 최대 한 번만 하므로
+ *    무한 반복될 수 없다. */
+async function handlePossibleDepletion() {
+  if (currentItems.length) return;
+
+  if (!currentPageWasFull) {
+    renderAllDone();
+    return;
+  }
+
+  await loadRecords({ preserveMessage: true });
+
+  if (!currentItems.length) {
+    renderAllDone();
+  }
+}
+
 /** 카드 한 장만 새로 그려 넣는다.
  *
  *  왜 필요한가: 예전에는 카드 하나를 제출/수정할 때마다 render(currentItems)로
@@ -587,10 +739,20 @@ async function postReview(body) {
  *  것처럼 보였다(§4.2 "난이도 미선택" 안내만 뜸).
  *
  *  그래서 방금 바뀐 카드 하나만 DOM에서 교체한다 — 다른 카드의 엘리먼트는
- *  건드리지 않으므로 그 안의 로컬 입력 상태가 그대로 보존된다. */
+ *  건드리지 않으므로 그 안의 로컬 입력 상태가 그대로 보존된다.
+ *
+ *  2026-09-07: 새 상태가 지금 필터와 안 맞으면 교체 대신 아예 지운다
+ *  (matchesCurrentFilter/removeCard 참고) — "패스했는데 미처리 목록에 그대로
+ *  남아있다"는 문제 때문. 다만 이건 "내 화면에서 방금 내가 처리한 카드"만
+ *  지우는 것일 뿐, 계정을 공유해 쓸 때 다른 세션이 먼저 처리한 카드를
+ *  알아채게 해주지는 않는다 — 여전히 화면 간 실시간 동기화는 없다. */
 function updateCard(item) {
   const key = recordKey(item);
   const el = tableWrap.querySelector(`[data-card-key="${key}"]`);
+  if (!matchesCurrentFilter(item.__review)) {
+    removeCard(item, el);
+    return;
+  }
   if (!el) {
     // 화면에 없다면(필터가 바뀌었거나 하는 드문 경우) 전체를 다시 그리는
     // 수밖에 없다.
@@ -610,23 +772,37 @@ function updateCard(item) {
  * §4.2 "처리 즉시 다음 미검토 행으로 포커스 자동 이동".
  *
  * 제출 응답에 갱신된 상태가 들어 있으므로 목록을 다시 불러오지 않는다.
+ *
+ * "다음 카드"는 updateCard()를 부르기 **전에** 미리 정해둔다 — 필터에 안
+ * 맞아 지금 처리한 카드가 currentItems에서 통째로 빠질 수 있는데(updateCard
+ * 주석 참고), 그 뒤에 인덱스를 다시 계산하면 currentItems가 한 칸씩 당겨져
+ * 바로 다음 카드를 건너뛰고 그다음 카드로 넘어가버린다. 여기서는 다음 카드의
+ * id만 미리 기억해뒀다가, 카드를 갱신/제거한 뒤 그 id로 다시 찾는다 — 다른
+ * 카드의 엘리먼트는 이번 갱신으로 바뀌지 않으므로 안전하다.
+ *
+ * 카드를 지운 뒤(목록이 비었을 수 있음) handlePossibleDepletion()을 마지막에
+ * 불러 "모든 검수를 완료하였습니다" 여부를 판단한다 — updateCard 한 번으로
+ * 끝나는 단건 동작이라 일괄 패스처럼 루프 중간에 부를 위험은 없다.
  */
-function afterSubmit(item, state) {
+async function afterSubmit(item, state) {
   item.__review = state;
   selected.delete(recordKey(item));
   const processedIndex = currentItems.indexOf(item);
-  updateCard(item);
-  updateBulkBar();
-
   const candidates = [...tableWrap.querySelectorAll(".card-check")];
-  const next =
+  const nextId =
     candidates.find((el) => {
       const idx = currentItems.findIndex((i) => String(i.id) === el.dataset.id);
       return idx > processedIndex;
-    }) || candidates[0];
+    })?.dataset.id || candidates[0]?.dataset.id;
 
+  updateCard(item);
+  updateBulkBar();
+
+  const next = nextId ? tableWrap.querySelector(`.card-check[data-id="${nextId}"]`) : null;
   next?.focus();
   next?.scrollIntoView({ block: "center", behavior: "smooth" });
+
+  await handlePossibleDepletion();
 }
 
 /** 카드/행의 난이도 선택 상태를 읽는다 — 1~4 버튼 또는 판독불가 버튼 중
@@ -821,8 +997,13 @@ function bindRowActions(items, scope = tableWrap) {
             contains_negative_expression: containsNegativeExpression,
           });
           item.__review = result.state;
+          // updateCard가 지금 필터에 안 맞으면 카드를 곧바로 지울 수 있어서
+          // (matchesCurrentFilter), 카드가 사라져도 방금 뭘 저장했는지 알 수
+          // 있도록 텍스트로 먼저 확인시켜준다(2026-09-07).
+          const savedMine = myReview(result.state);
           updateCard(item);
-          showMessage("");
+          showMessage(`수정 저장 완료 — ${describeSavedReviewPlain(savedMine)}`, { type: "success" });
+          await handlePossibleDepletion();
         } else if (wantsPass) {
           // 단독 패스 — 타이핑 입력창 내용은 쓰지 않는다(패스에는 텍스트가
           // 없다, main.py의 서버 쪽 검증과 같은 규칙).
@@ -837,7 +1018,7 @@ function bindRowActions(items, scope = tableWrap) {
             contains_negative_expression: containsNegativeExpression,
           });
           showMessage("");
-          afterSubmit(item, result.state);
+          await afterSubmit(item, result.state);
         } else {
           const result = await postReview({
             assessment_id: item.assessment_id,
@@ -853,7 +1034,7 @@ function bindRowActions(items, scope = tableWrap) {
             contains_negative_expression: containsNegativeExpression,
           });
           showMessage("");
-          afterSubmit(item, result.state);
+          await afterSubmit(item, result.state);
         }
       } catch (err) {
         btn.disabled = false;
@@ -913,8 +1094,12 @@ async function fetchReviewStates(items) {
   }
 }
 
-async function loadRecords() {
-  showMessage("");
+/** @param {{ preserveMessage?: boolean }} [opts] preserveMessage가 true면
+ *  #message 배너를 지우지 않는다 — handlePossibleDepletion이 페이지 소진
+ *  뒤 조용히 다시 불러올 때, 직전 배치의 처리 결과 메시지("N건 패스 처리")를
+ *  화면에 남겨두기 위해 쓴다(2026-09-07). */
+async function loadRecords({ preserveMessage = false } = {}) {
+  if (!preserveMessage) showMessage("");
   // 페이지/필터가 바뀌면 이전 선택은 의미가 없다 (보이지 않는 건을 패스하면 안 됨)
   selected.clear();
   updateBulkBar();
@@ -932,6 +1117,9 @@ async function loadRecords() {
       item.__review = states[recordKey(item)] || EMPTY_STATE;
       return item;
     });
+    // 이 페이지가 PAGE_SIZE만큼 꽉 차서 왔는지 — handlePossibleDepletion이
+    // "다 처리하면 더 있을 수 있으니 재조회할지"를 판단하는 기준이다.
+    currentPageWasFull = data.items.length >= PAGE_SIZE;
 
     // 새로 불러온 건은 패스 체크박스를 기본으로 켜둔다(2026-08-31, 요청) —
     // 대부분은 OCR이 그대로 맞아서 체크만 하고 넘어가던 반복 클릭을 줄인다.

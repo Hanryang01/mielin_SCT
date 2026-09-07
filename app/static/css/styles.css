@@ -661,6 +661,8 @@ mark.diff-insert { background: #bbf7d0; color: #166534; }
 .admin-comment-toggle:hover { background: var(--bg); }
 .empty { padding: 60px; text-align: center; color: var(--muted); }
 .message { color: var(--red); font-size: 13px; margin: 12px 14px 0; }
+/* 성공/정보성 메시지는 초록으로 구분한다(2026-09-07) — showMessage(text, { type: "success" }) */
+.message.message-success { color: var(--green); }
 
 .pager {
   display: flex;
